@@ -894,20 +894,51 @@ def render_html_table(df, col_groups=None):
         evt.stopPropagation();
         var text = clipData[idx];
         if (!text) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(text).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{ fallbackCopy(text, btn); }});
-        }} else {{
-            fallbackCopy(text, btn);
+        var copied = false;
+        
+        // 방법 1: parent document에서 textarea 복사 (same-origin)
+        try {{
+            var pd = window.parent.document;
+            var ta = pd.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+            pd.body.appendChild(ta);
+            var range = pd.createRange();
+            ta.contentEditable = true;
+            ta.readOnly = false;
+            range.selectNodeContents(ta);
+            var sel = window.parent.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            ta.setSelectionRange(0, 999999);
+            copied = pd.execCommand('copy');
+            pd.body.removeChild(ta);
+        }} catch(e) {{}}
+        
+        // 방법 2: postMessage로 부모에게 복사 요청
+        if (!copied) {{
+            try {{
+                window.parent.postMessage({{type:'clipboard_copy', text:text}}, '*');
+                copied = true;
+            }} catch(e) {{}}
         }}
-    }}
-    function fallbackCopy(text, btn) {{
-        var ta = document.createElement('textarea');
-        ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
-        document.body.appendChild(ta); ta.select();
-        try {{ document.execCommand('copy'); showCopied(btn); }} catch(e) {{}}
-        document.body.removeChild(ta);
+        
+        // 방법 3: 자체 textarea
+        if (!copied) {{
+            try {{
+                var ta2 = document.createElement('textarea');
+                ta2.value = text;
+                ta2.style.cssText = 'position:fixed;left:-9999px;';
+                document.body.appendChild(ta2);
+                ta2.select();
+                ta2.setSelectionRange(0, 999999);
+                copied = document.execCommand('copy');
+                document.body.removeChild(ta2);
+            }} catch(e) {{}}
+        }}
+        
+        if (copied) showCopied(btn);
     }}
     function showCopied(btn) {{
         var orig = btn.innerHTML;
@@ -1630,6 +1661,26 @@ elif menu == "매니저 화면 (로그인)":
                 # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
                 col_groups = st.session_state.get('col_groups', [])
                 table_html = render_html_table(final_df, col_groups=col_groups)
+                
+                # 부모 페이지에 클립보드 리스너 주입 (iframe→parent 메시지 수신)
+                st.markdown("""
+                <script>
+                window.addEventListener('message', function(e) {
+                    if (e.data && e.data.type === 'clipboard_copy') {
+                        var ta = document.createElement('textarea');
+                        ta.value = e.data.text;
+                        ta.setAttribute('readonly', '');
+                        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        ta.setSelectionRange(0, 999999);
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    }
+                });
+                </script>
+                """, unsafe_allow_html=True)
+                
                 # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
           except Exception as e:
