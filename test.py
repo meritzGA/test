@@ -249,6 +249,7 @@ def load_data_and_config():
     st.session_state['merge_key2_col'] = str(cfg.get('merge_key2_col', ''))
     st.session_state['col_groups'] = cfg.get('col_groups', []) if isinstance(cfg.get('col_groups'), list) else []
     st.session_state['data_date'] = str(cfg.get('data_date', ''))
+    st.session_state['clip_footer'] = str(cfg.get('clip_footer', ''))
     for item in st.session_state['admin_cols']:
         if 'fallback_col' not in item: item['fallback_col'] = ''
     
@@ -275,6 +276,7 @@ def _reset_session_state():
     st.session_state['merge_key2_col'] = ''
     st.session_state['col_groups'] = []
     st.session_state['data_date'] = ''
+    st.session_state['clip_footer'] = ''
 
 def has_data():
     df = st.session_state.get('df_merged', None)
@@ -294,6 +296,7 @@ def save_config():
         'merge_key2_col': st.session_state.get('merge_key2_col', ''),
         'col_groups': st.session_state.get('col_groups', []),
         'data_date': st.session_state.get('data_date', ''),
+        'clip_footer': st.session_state.get('clip_footer', ''),
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -712,50 +715,77 @@ def render_html_table(df, col_groups=None):
             name_col = c
             break
     
+    # 식별 열 vs 데이터 열 분류
+    person_keywords = ['설계사', '성명', '이름', '팀장', '대리점', '지사', '소속', '본부', '지점', '부서']
+    goal_keywords = ['다음목표', '부족금액']
+    
+    id_cols = []  # 인적사항 열 (이름줄에 합침)
+    data_cols = []  # 실적 데이터 열 (본문에 표시)
+    for c in columns:
+        if c == '순번' or c == '맞춤분류':
+            continue
+        if any(kw in c for kw in goal_keywords):
+            data_cols.append(c)
+        elif any(kw in c for kw in person_keywords):
+            id_cols.append(c)
+        else:
+            data_cols.append(c)
+    
     # 그룹별 열 매핑
     col_to_grp = {}
     for grp in col_groups:
         for c in grp['cols']:
             col_to_grp[c] = grp['name']
     
-    # 기준일
+    # 기준일 / 인사말
     import json as _json
     data_date = ''
+    clip_footer = ''
     try:
         data_date = st.session_state.get('data_date', '')
+        clip_footer = st.session_state.get('clip_footer', '')
     except Exception:
         pass
     
-    clip_texts = []  # JS 배열로 전달할 텍스트
+    clip_texts = []
     for row_idx, (_, row) in enumerate(df.iterrows()):
-        name_val = str(row.get(name_col, '')) if name_col else ''
-        skip_cols = {'순번', name_col} if name_col else {'순번'}
+        # 인적사항 조합: 대리점명 + 이름 + "팀장님"
+        id_parts = []
+        for c in id_cols:
+            v = str(row[c]) if not pd.isna(row[c]) else ''
+            if v.strip() and v != '0':
+                id_parts.append(v.strip())
+        person_line = ' '.join(id_parts)
+        if person_line and not person_line.endswith('님'):
+            person_line += ' 팀장님'
         
         lines = []
-        lines.append(f"📋 시상 현황 안내")
+        lines.append("📋 메리츠 시상 현황 안내")
         if data_date:
             lines.append(f"📅 기준일: {data_date}")
         lines.append("")
-        lines.append(f"👤 {name_val}")
+        lines.append(f"👤 {person_line}")
         lines.append("")
         
         current_group = None
-        for c in columns:
-            if c in skip_cols:
-                continue
+        for c in data_cols:
             val = str(row[c]) if not pd.isna(row[c]) else ''
             if not val.strip() or val == '0':
                 continue
             
             grp = col_to_grp.get(c)
+            is_goal = any(kw in c for kw in goal_keywords)
+            
             if grp and grp != current_group:
                 if current_group is not None:
                     lines.append("")
                 lines.append(f"━━ {grp} ━━")
                 current_group = grp
-            elif not grp and current_group is not None:
+            elif grp is None and not is_goal and current_group is not None:
+                # 일반 데이터 열이 그룹 밖으로 나가면 구분선
                 lines.append("")
                 current_group = None
+            # is_goal이면 이전 그룹 유지 (구분선 삽입 안 함)
             
             if '부족금액' in c:
                 lines.append(f"🔴 {c}: {val}")
@@ -763,6 +793,11 @@ def render_html_table(df, col_groups=None):
                 lines.append(f"🎯 {c}: {val}")
             else:
                 lines.append(f"  {c}: {val}")
+        
+        # 인사말 추가
+        if clip_footer:
+            lines.append("")
+            lines.append(clip_footer)
         
         clip_texts.append('\n'.join(lines))
     
@@ -775,14 +810,23 @@ def render_html_table(df, col_groups=None):
     html += '<div class="mobile-view">'
     
     for row_idx, (_, row) in enumerate(df.iterrows()):
-        name_val = str(row.get(name_col, '')) if name_col else ''
+        # 인적사항 조합
+        id_parts_card = []
+        for c in id_cols:
+            v = str(row[c]) if not pd.isna(row[c]) else ''
+            if v.strip() and v != '0':
+                id_parts_card.append(v.strip())
+        person_card = ' '.join(id_parts_card) if id_parts_card else ''
+        
+        # 이름만 추출 (카드 헤더 굵은 글씨용)
+        name_val = str(row.get(name_col, '')) if name_col else (person_card or '')
         num_val = str(row.get('순번', row_idx + 1)) if '순번' in columns else str(row_idx + 1)
         
         html += f'<div class="m-card">'
         
-        # 카드 헤더
+        # 카드 헤더: 이름 + 요약 배지
         summary_items = []
-        for c in columns:
+        for c in data_cols:
             if '부족금액' in c:
                 v = str(row[c]) if not pd.isna(row[c]) else ''
                 if v and v != '0' and v.strip():
@@ -803,24 +847,31 @@ def render_html_table(df, col_groups=None):
         html += '<div class="m-card-body">'
         
         # 📋 복사 버튼
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 시상 현황 복사</button></div>'
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡으로 보내기</button></div>'
         
-        current_group = None
-        skip_cols = {'순번', name_col} if name_col else {'순번'}
-        
-        for c in columns:
-            if c in skip_cols:
+        # 인적사항 (이름 외 추가 정보)
+        for c in id_cols:
+            if c == name_col:
                 continue
+            val = str(row[c]) if not pd.isna(row[c]) else ''
+            if val.strip() and val != '0':
+                html += f'<div class="m-row"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
+        
+        # 실적 데이터
+        current_group = None
+        for c in data_cols:
             val = str(row[c]) if not pd.isna(row[c]) else ''
             if not val.strip() or val == '0':
                 continue
             
             grp = col_to_grp.get(c)
+            is_goal = any(kw in c for kw in goal_keywords)
+            
             if grp and grp != current_group:
                 gc = group_color_map.get(grp, '#4e5968')
                 html += f'<div class="m-grp-label" style="border-left:3px solid {gc}; padding-left:8px;">{grp}</div>'
                 current_group = grp
-            elif not grp and current_group is not None:
+            elif grp is None and not is_goal and current_group is not None:
                 current_group = None
             
             extra_cls = ' m-sc' if c in shortfall_cols else ''
@@ -1132,12 +1183,18 @@ if menu == "관리자 화면 (설정)":
         available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', '_unified_search_key']]
         
         # ========================================
-        st.header("2. 📅 데이터 기준일 설정")
-        with st.form("date_form"):
+        st.header("2. 📅 기준일 및 카톡 복사 문구 설정")
+        with st.form("date_footer_form"):
             current_date = st.session_state.get('data_date', '')
-            new_date = st.text_input("조회 화면에 표시할 기준일 (예: 2025.02.24)", value=current_date)
+            new_date = st.text_input("데이터 기준일 (예: 2026.02.24)", value=current_date)
+            
+            default_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
+            current_footer = st.session_state.get('clip_footer', '') or default_footer
+            new_footer = st.text_area("카톡 하단 인사말 (줄바꿈 가능)", value=current_footer, height=100)
+            
             if st.form_submit_button("저장"):
                 st.session_state['data_date'] = new_date
+                st.session_state['clip_footer'] = new_footer
                 save_data_and_config()
                 st.rerun()
         
