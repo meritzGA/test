@@ -8,6 +8,7 @@ import os
 import pickle
 import uuid
 import shutil
+import json
 from datetime import datetime
 
 st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layout="wide")
@@ -323,6 +324,163 @@ def save_data_and_config():
     """하위 호환용 — 기존 코드에서 호출하는 곳은 config만 저장"""
     save_config()
 
+# ==========================================
+# 💰 시상금 계산 모듈 (app_data/config.json 연동)
+# ==========================================
+PRIZE_DATA_DIR = "app_data"
+PRIZE_CONFIG_FILE = os.path.join(PRIZE_DATA_DIR, "config.json")
+
+def _safe_str_prize(val):
+    """사번 정제 (엑셀 외계어 복원, 대문자 통일)"""
+    if pd.isna(val) or val is None: return ""
+    try:
+        if isinstance(val, (int, float)) and float(val).is_integer():
+            val = int(float(val))
+    except: pass
+    s = str(val)
+    s = re.sub(r'_[xX]([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
+    s = re.sub(r'\s+', '', s)
+    if s.endswith('.0'): s = s[:-2]
+    return s.upper()
+
+def _safe_float_prize(val):
+    if pd.isna(val) or val is None: return 0.0
+    s = str(val).replace(',', '').strip()
+    try: return float(s)
+    except: return 0.0
+
+def load_prize_module():
+    """시상금 config + raw data 로드 (app_data/ 디렉토리에서)"""
+    if not os.path.exists(PRIZE_CONFIG_FILE):
+        return None, {}
+    try:
+        with open(PRIZE_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            prize_config = json.load(f)
+    except:
+        return None, {}
+    # 호환성 보장
+    for c in prize_config:
+        if 'category' not in c: c['category'] = 'weekly'
+    
+    prize_data = {}
+    for fname in os.listdir(PRIZE_DATA_DIR):
+        if fname.endswith('.pkl'):
+            try:
+                prize_data[fname.replace('.pkl', '')] = pd.read_pickle(os.path.join(PRIZE_DATA_DIR, fname))
+            except: pass
+    return prize_config, prize_data
+
+def calculate_prize_for_code(target_code, prize_config, prize_data):
+    """특정 사번의 시상금 계산"""
+    if not prize_config or not prize_data: return [], 0
+    results = []
+    safe_code = _safe_str_prize(target_code)
+    
+    for cfg in prize_config:
+        df = prize_data.get(cfg.get('file'))
+        if df is None: continue
+        col_code = cfg.get('col_code', '')
+        if not col_code or col_code not in df.columns: continue
+        
+        _cc = f"_pclean_{col_code}"
+        if _cc not in df.columns:
+            df[_cc] = df[col_code].apply(_safe_str_prize)
+        match_df = df[df[_cc] == safe_code]
+        if match_df.empty: continue
+        
+        cat = cfg.get('category', 'weekly')
+        p_type = cfg.get('type', '구간 시책')
+        
+        if cat == 'weekly':
+            if "1기간" in p_type:
+                raw_prev = match_df[cfg['col_val_prev']].values[0] if cfg.get('col_val_prev') in df.columns else 0
+                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') in df.columns else 0
+                val_prev, val_curr = _safe_float_prize(raw_prev), _safe_float_prize(raw_curr)
+                curr_req = float(cfg.get('curr_req', 100000.0))
+                calc_rate, tier_prev, prize = 0, 0, 0
+                if val_curr >= curr_req:
+                    for amt, rate in cfg.get('tiers', []):
+                        if val_prev >= amt:
+                            tier_prev, calc_rate = amt, rate
+                            prize = (tier_prev + curr_req) * (calc_rate / 100)
+                            break
+                shortfall_curr = max(0, curr_req - val_curr)
+                results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지1",
+                    "val_prev": val_prev, "val_curr": val_curr, "curr_req": curr_req,
+                    "rate": calc_rate, "prize": prize, "shortfall_curr": shortfall_curr})
+            elif "2기간" in p_type:
+                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') in df.columns else 0
+                val_curr = _safe_float_prize(raw_curr)
+                curr_req = float(cfg.get('curr_req', 100000.0))
+                calc_rate, tier_achieved, prize = 0, 0, 0
+                for amt, rate in cfg.get('tiers', []):
+                    if val_curr >= amt: tier_achieved, calc_rate = amt, rate; break
+                if tier_achieved > 0:
+                    prize = (tier_achieved + curr_req) * (calc_rate / 100)
+                next_tier = None
+                for amt, rate in reversed(cfg.get('tiers', [])):
+                    if val_curr < amt: next_tier = amt; break
+                shortfall = (next_tier - val_curr) if next_tier else 0
+                results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지2",
+                    "val": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
+                    "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall})
+            else:
+                raw_val = match_df[cfg['col_val']].values[0] if cfg.get('col_val') in df.columns else 0
+                val = _safe_float_prize(raw_val)
+                calc_rate, tier_achieved, prize = 0, 0, 0
+                for amt, rate in cfg.get('tiers', []):
+                    if val >= amt:
+                        tier_achieved, calc_rate = amt, rate
+                        prize = tier_achieved * (calc_rate / 100)
+                        break
+                next_tier = None
+                for amt, rate in reversed(cfg.get('tiers', [])):
+                    if val < amt: next_tier = amt; break
+                shortfall = (next_tier - val) if next_tier else 0
+                results.append({"name": cfg['name'], "category": "weekly", "type": "구간",
+                    "val": val, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
+                    "next_tier": next_tier, "shortfall": shortfall})
+        elif cat == 'cumulative':
+            col_val = cfg.get('col_val', '')
+            raw_val = match_df[col_val].values[0] if col_val and col_val in match_df.columns else 0
+            val = _safe_float_prize(raw_val)
+            col_prize = cfg.get('col_prize', '')
+            raw_prize = match_df[col_prize].values[0] if col_prize and col_prize in match_df.columns else 0
+            prize_val = _safe_float_prize(raw_prize)
+            results.append({"name": cfg['name'], "category": "cumulative", "type": "누계",
+                "val": val, "prize": prize_val})
+    
+    total = sum(r['prize'] for r in results)
+    return results, total
+
+def format_prize_clip_text(results, total):
+    """시상금 → 카톡 복사 텍스트"""
+    if not results: return ""
+    lines = ["", "💰 예상 시상금 현황", f"  총 시상금: {total:,.0f}원"]
+    for r in results:
+        if r['prize'] > 0:
+            lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
+        if r.get('shortfall', 0) > 0 and r.get('next_tier'):
+            lines.append(f"    다음 {int(r['next_tier']//10000)}만 구간까지 {r['shortfall']:,.0f}원")
+        elif r.get('shortfall_curr', 0) > 0:
+            lines.append(f"    당월 필수 목표까지 {r['shortfall_curr']:,.0f}원 부족")
+    return '\n'.join(lines)
+
+def build_prize_card_html(results, total):
+    """시상금 → 모바일 카드 HTML"""
+    if not results: return ""
+    html = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
+    html += f'<div style="font-weight:800; color:#d9232e; font-size:15px; margin-bottom:6px;">💰 예상 시상금: {total:,.0f}원</div>'
+    for r in results:
+        pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
+        html += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+        if r.get('shortfall', 0) > 0 and r.get('next_tier'):
+            html += f'<div class="m-row m-sc"><span class="m-label">  다음 {int(r["next_tier"]//10000)}만까지</span><span class="m-val">{r["shortfall"]:,.0f}원</span></div>'
+        elif r.get('shortfall_curr', 0) > 0:
+            html += f'<div class="m-row m-sc"><span class="m-label">  당월 필수까지</span><span class="m-val">{r["shortfall_curr"]:,.0f}원</span></div>'
+    html += '</div>'
+    return html
+
 if 'df_merged' not in st.session_state:
     _reset_session_state()
     load_data_and_config()
@@ -381,9 +539,10 @@ def load_file_data(file_bytes, file_name):
 # ==========================================
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
-def render_html_table(df, col_groups=None):
+def render_html_table(df, col_groups=None, prize_data_map=None):
     """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환
     ★ colspan 없이 셀 수를 항상 동일하게 유지 → 밀림 방지
+    prize_data_map: {row_idx: (results, total)} — 시상금 데이터
     """
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
     num_cols = len(df.columns)
@@ -696,7 +855,10 @@ def render_html_table(df, col_groups=None):
             f_cls = fc(i)
             extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
             html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
-        html += f'<td data-col="-1"><button class="d-copy-btn" onclick="copyClip({row_idx}, this, event)">📋</button></td>'
+        html += f'<td data-col="-1"><button class="d-copy-btn" onclick="copyClip({row_idx}, this, event)">📋</button>'
+        if prize_data_map and row_idx in prize_data_map:
+            html += f'<button class="d-copy-btn" onclick="showPrize({row_idx}, event)" style="margin-left:2px;">💰</button>'
+        html += '</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
     # ── END desktop table ──
@@ -739,7 +901,6 @@ def render_html_table(df, col_groups=None):
             col_to_grp[c] = grp['name']
     
     # 기준일 / 인사말
-    import json as _json
     data_date = ''
     clip_footer = ''
     try:
@@ -800,6 +961,13 @@ def render_html_table(df, col_groups=None):
             else:
                 lines.append(f"  {c}: {val}")
         
+        # 시상금 정보 추가
+        if prize_data_map and row_idx in prize_data_map:
+            p_results, p_total = prize_data_map[row_idx]
+            prize_text = format_prize_clip_text(p_results, p_total)
+            if prize_text:
+                lines.append(prize_text)
+        
         # 인사말 추가
         if clip_footer:
             lines.append("")
@@ -809,8 +977,30 @@ def render_html_table(df, col_groups=None):
     
     # JS 안전하게 전달 — HTML-safe base64 인코딩
     import base64 as _b64
-    clip_json_bytes = _json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
+    clip_json_bytes = json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
     clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
+    
+    # 💰 시상금 HTML 데이터 (행별)
+    prize_htmls = []
+    for row_idx in range(len(df)):
+        if prize_data_map and row_idx in prize_data_map:
+            p_results, p_total = prize_data_map[row_idx]
+            ph = f'<div style="padding:5px;">'
+            ph += f'<div style="font-weight:800;color:#d9232e;font-size:18px;margin-bottom:12px;">💰 총 시상금: {p_total:,.0f}원</div>'
+            for r in p_results:
+                pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
+                ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                if r.get('shortfall', 0) > 0 and r.get('next_tier'):
+                    ph += f'<div style="padding:2px 0 6px 10px;color:#ff6b00;font-size:13px;">→ 다음 {int(r["next_tier"]//10000)}만까지 {r["shortfall"]:,.0f}원</div>'
+                elif r.get('shortfall_curr', 0) > 0:
+                    ph += f'<div style="padding:2px 0 6px 10px;color:#ff6b00;font-size:13px;">→ 당월 필수까지 {r["shortfall_curr"]:,.0f}원 부족</div>'
+            ph += '</div>'
+            prize_htmls.append(ph)
+        else:
+            prize_htmls.append('')
+    
+    prize_json_bytes = json.dumps(prize_htmls, ensure_ascii=False).encode('utf-8')
+    prize_b64 = _b64.b64encode(prize_json_bytes).decode('ascii')
     
     # ══════════════════════════════════════════
     # 📱 모바일 카드 뷰 생성
@@ -845,6 +1035,14 @@ def render_html_table(df, col_groups=None):
                     summary_items.append(f'<span class="m-goal">{v}</span>')
         summary = ' '.join(summary_items)
         
+        # 시상금 배지 추가
+        if prize_data_map and row_idx in prize_data_map:
+            _, p_total = prize_data_map[row_idx]
+            if p_total > 0:
+                p_display = f"{int(p_total)//10000}만" if p_total >= 10000 and p_total % 10000 == 0 else f"{p_total:,.0f}"
+                summary_items.append(f'<span style="background:#fff3e0;color:#d9232e;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;">💰{p_display}</span>')
+                summary = ' '.join(summary_items)
+        
         html += f'<div class="m-card-head" onclick="this.parentElement.classList.toggle(\'open\')">'
         html += f'<span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
         if summary:
@@ -854,8 +1052,11 @@ def render_html_table(df, col_groups=None):
         # 카드 본문
         html += '<div class="m-card-body">'
         
-        # 📋 복사 버튼
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button></div>'
+        # 📋 복사 버튼 + 💰 시상금 조회 버튼
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button>'
+        if prize_data_map and row_idx in prize_data_map:
+            html += f'<button class="m-copy-btn" onclick="showPrize({row_idx}, event)" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
+        html += '</div>'
         
         # 인적사항 (이름 외 추가 정보)
         for c in clip_name_cols:
@@ -885,6 +1086,11 @@ def render_html_table(df, col_groups=None):
             extra_cls = ' m-sc' if c in shortfall_cols else ''
             html += f'<div class="m-row{extra_cls}"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
         
+        # 시상금 섹션
+        if prize_data_map and row_idx in prize_data_map:
+            p_results, p_total = prize_data_map[row_idx]
+            html += build_prize_card_html(p_results, p_total)
+        
         html += '</div></div>'  # m-card-body, m-card
     
     html += '</div>'  # mobile-view
@@ -907,6 +1113,18 @@ def render_html_table(df, col_groups=None):
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
     </div>
+    <div id="prize-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
+        onclick="if(event.target===this){this.style.display='none';}">
+        <div style="background:#fff; border-radius:16px; padding:24px; width:100%;
+            max-width:450px; max-height:70vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+            <h3 style="margin:0 0 12px; font-size:17px;">💰 시상금 상세 조회</h3>
+            <div id="prize-content"></div>
+            <button onclick="document.getElementById('prize-overlay').style.display='none'" style="margin-top:12px;
+                width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
+                cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
+        </div>
+    </div>
     """
 
     # ── JavaScript ──
@@ -915,6 +1133,7 @@ def render_html_table(df, col_groups=None):
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
     var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
+    var prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}"))));
     
     function isMobile() {{ return window.innerWidth <= 768; }}
     
@@ -1018,6 +1237,13 @@ def render_html_table(df, col_groups=None):
         btn.classList.add('copied');
         btn.innerHTML = '✅ 복사 완료!';
         setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
+    }}
+    function showPrize(idx, evt) {{
+        if (evt) evt.stopPropagation();
+        var h = prizeHtml[idx];
+        if (!h) {{ alert('시상금 데이터가 없습니다.'); return; }}
+        document.getElementById('prize-content').innerHTML = h;
+        document.getElementById('prize-overlay').style.display = 'flex';
     }}
     
     function applyFreeze() {{
@@ -1524,6 +1750,31 @@ if menu == "관리자 화면 (설정)":
                             st.rerun()
         else:
             st.info("먼저 7번에서 표시 순서를 설정해주세요.")
+        
+        # ========================================
+        st.divider()
+        st.header("9. 💰 시상금 계산 연동 (자동 감지)")
+        if os.path.exists(PRIZE_CONFIG_FILE):
+            try:
+                with open(PRIZE_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    p_cfg = json.load(f)
+                weekly_cnt = sum(1 for c in p_cfg if c.get('category', 'weekly') == 'weekly')
+                cumul_cnt = sum(1 for c in p_cfg if c.get('category') == 'cumulative')
+                
+                # raw data 파일 수 확인
+                pkl_cnt = sum(1 for f in os.listdir(PRIZE_DATA_DIR) if f.endswith('.pkl'))
+                
+                st.success(f"✅ 시상금 계산 모듈 연동됨 | 주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개 시책 | 데이터 파일 {pkl_cnt}개")
+                st.caption("시상금 계산 앱(app_data/config.json)의 설정이 자동으로 반영됩니다. 매니저 화면에서 📋 카톡 보내기에 시상금이 포함되고, 💰 시상금 조회 버튼이 표시됩니다.")
+                
+                with st.expander("📋 연동된 시상 항목 목록"):
+                    for i, c in enumerate(p_cfg):
+                        cat_icon = "📌" if c.get('category', 'weekly') == 'weekly' else "📈"
+                        st.markdown(f"{cat_icon} **{c.get('name', f'항목 {i+1}')}** ({c.get('type', '구간')}) — 파일: `{c.get('file', '?')}`")
+            except Exception as e:
+                st.error(f"config.json 읽기 오류: {e}")
+        else:
+            st.info("💡 시상금 계산 앱의 설정 파일(app_data/config.json)이 없습니다. 시상금 계산 앱에서 시책을 설정하면 자동으로 연동됩니다.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
@@ -1733,7 +1984,39 @@ elif menu == "매니저 화면 (로그인)":
                 
                 # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
                 col_groups = st.session_state.get('col_groups', [])
-                table_html = render_html_table(final_df, col_groups=col_groups)
+                
+                # 💰 시상금 계산 (app_data/config.json 연동)
+                prize_data_map = {}
+                try:
+                    prize_config, prize_raw = load_prize_module()
+                    if prize_config and prize_raw:
+                        # 사번 열 찾기: _unified_search_key 또는 merge key 또는 설계사코드 포함 열
+                        code_col = None
+                        if '_unified_search_key' in my_df.columns:
+                            code_col = '_unified_search_key'
+                        else:
+                            for c in my_df.columns:
+                                if '설계사코드' in c or '사번' in c:
+                                    code_col = c; break
+                            if not code_col:
+                                mk1 = st.session_state.get('merge_key1_col', '')
+                                if mk1 and mk1 in my_df.columns:
+                                    code_col = mk1
+                        
+                        if code_col:
+                            for row_idx, (_, row) in enumerate(final_df.iterrows()):
+                                orig_idx = row.name  # 원본 인덱스
+                                if orig_idx in my_df.index:
+                                    raw_code = my_df.loc[orig_idx, code_col] if code_col in my_df.columns else ''
+                                    agent_code = clean_key(str(raw_code)) if not pd.isna(raw_code) else ''
+                                    if agent_code:
+                                        results, total = calculate_prize_for_code(agent_code, prize_config, prize_raw)
+                                        if results:
+                                            prize_data_map[row_idx] = (results, total)
+                except Exception:
+                    pass  # 시상금 계산 실패해도 테이블은 정상 표시
+                
+                table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
                 
                 # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
