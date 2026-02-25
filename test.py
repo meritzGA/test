@@ -801,8 +801,10 @@ def render_html_table(df, col_groups=None):
         
         clip_texts.append('\n'.join(lines))
     
-    # JS 안전하게 전달
-    clip_json = _json.dumps(clip_texts, ensure_ascii=False)
+    # JS 안전하게 전달 — HTML-safe base64 인코딩
+    import base64 as _b64
+    clip_json_bytes = _json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
+    clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
     
     # ══════════════════════════════════════════
     # 📱 모바일 카드 뷰 생성
@@ -886,7 +888,7 @@ def render_html_table(df, col_groups=None):
     <script>
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
-    var clipData = {clip_json};
+    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
     
     function isMobile() {{ return window.innerWidth <= 768; }}
     
