@@ -849,7 +849,7 @@ def render_html_table(df, col_groups=None):
         html += '<div class="m-card-body">'
         
         # 📋 복사 버튼
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡으로 보내기</button></div>'
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button></div>'
         
         # 인적사항 (이름 외 추가 정보)
         for c in id_cols:
@@ -896,51 +896,22 @@ def render_html_table(df, col_groups=None):
         evt.stopPropagation();
         var text = clipData[idx];
         if (!text) return;
-        var copied = false;
         
-        // 방법 1: parent document에서 textarea 복사 (same-origin)
-        try {{
-            var pd = window.parent.document;
-            var ta = pd.createElement('textarea');
-            ta.value = text;
-            ta.setAttribute('readonly', '');
-            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
-            pd.body.appendChild(ta);
-            var range = pd.createRange();
-            ta.contentEditable = true;
-            ta.readOnly = false;
-            range.selectNodeContents(ta);
-            var sel = window.parent.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-            ta.setSelectionRange(0, 999999);
-            copied = pd.execCommand('copy');
-            pd.body.removeChild(ta);
-        }} catch(e) {{}}
-        
-        // 방법 2: postMessage로 부모에게 복사 요청
-        if (!copied) {{
-            try {{
-                window.parent.postMessage({{type:'clipboard_copy', text:text}}, '*');
-                copied = true;
-            }} catch(e) {{}}
+        // 📱 모바일: 네이티브 공유 (카톡 직접 선택 가능)
+        if (isMobile() && navigator.share) {{
+            navigator.share({{ text: text }}).then(function() {{
+                showCopied(btn);
+            }}).catch(function() {{
+                // 공유 취소 시 복사 팝업으로 대체
+                window.parent.postMessage({{type:'clip_copy', text:text}}, '*');
+                showCopied(btn);
+            }});
+            return;
         }}
         
-        // 방법 3: 자체 textarea
-        if (!copied) {{
-            try {{
-                var ta2 = document.createElement('textarea');
-                ta2.value = text;
-                ta2.style.cssText = 'position:fixed;left:-9999px;';
-                document.body.appendChild(ta2);
-                ta2.select();
-                ta2.setSelectionRange(0, 999999);
-                copied = document.execCommand('copy');
-                document.body.removeChild(ta2);
-            }} catch(e) {{}}
-        }}
-        
-        if (copied) showCopied(btn);
+        // 🖥️ PC: 부모 페이지로 복사 요청
+        window.parent.postMessage({{type:'clip_copy', text:text}}, '*');
+        showCopied(btn);
     }}
     function showCopied(btn) {{
         var orig = btn.innerHTML;
@@ -1664,20 +1635,85 @@ elif menu == "매니저 화면 (로그인)":
                 col_groups = st.session_state.get('col_groups', [])
                 table_html = render_html_table(final_df, col_groups=col_groups)
                 
-                # 부모 페이지에 클립보드 리스너 주입 (iframe→parent 메시지 수신)
+                # 부모 페이지: 클립보드 복사 핸들러 (iframe 외부에서 실행)
                 st.markdown("""
+                <style>
+                #clip-overlay {
+                    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+                    background:rgba(0,0,0,0.5); z-index:99999;
+                    justify-content:center; align-items:center; padding:20px;
+                }
+                #clip-overlay.show { display:flex; }
+                #clip-box {
+                    background:#fff; border-radius:16px; padding:20px; width:100%;
+                    max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);
+                }
+                #clip-box h3 { margin:0 0 10px; font-size:16px; }
+                #clip-ta {
+                    width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
+                    padding:10px; font-size:14px; resize:none; font-family:inherit;
+                }
+                #clip-box button {
+                    margin-top:10px; width:100%; padding:12px; border:none; border-radius:10px;
+                    font-size:15px; font-weight:700; cursor:pointer;
+                }
+                #clip-copy-btn { background:#FEE500; color:#3C1E1E; }
+                #clip-close-btn { background:#f2f4f6; color:#333; margin-top:6px; }
+                </style>
+                <div id="clip-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+                    <div id="clip-box">
+                        <h3>📋 아래 텍스트를 복사하세요</h3>
+                        <textarea id="clip-ta" readonly></textarea>
+                        <button id="clip-copy-btn" onclick="doCopy()">📋 복사하기</button>
+                        <button id="clip-close-btn" onclick="document.getElementById('clip-overlay').classList.remove('show')">닫기</button>
+                    </div>
+                </div>
                 <script>
+                function doCopy() {
+                    var ta = document.getElementById('clip-ta');
+                    var text = ta.value;
+                    // Clipboard API 시도
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).then(function() {
+                            var btn = document.getElementById('clip-copy-btn');
+                            btn.textContent = '✅ 복사 완료!';
+                            btn.style.background = '#22C55E';
+                            btn.style.color = '#fff';
+                            setTimeout(function() { document.getElementById('clip-overlay').classList.remove('show'); btn.textContent='📋 복사하기'; btn.style.background='#FEE500'; btn.style.color='#3C1E1E'; }, 1200);
+                        }).catch(function() { manualCopy(); });
+                    } else {
+                        manualCopy();
+                    }
+                }
+                function manualCopy() {
+                    var ta = document.getElementById('clip-ta');
+                    ta.readOnly = false;
+                    ta.focus(); ta.select();
+                    ta.setSelectionRange(0, 999999);
+                    try { document.execCommand('copy'); } catch(e) {}
+                    ta.readOnly = true;
+                    var btn = document.getElementById('clip-copy-btn');
+                    btn.textContent = '✅ 복사 완료!';
+                    btn.style.background = '#22C55E';
+                    btn.style.color = '#fff';
+                    setTimeout(function() { document.getElementById('clip-overlay').classList.remove('show'); btn.textContent='📋 복사하기'; btn.style.background='#FEE500'; btn.style.color='#3C1E1E'; }, 1200);
+                }
                 window.addEventListener('message', function(e) {
-                    if (e.data && e.data.type === 'clipboard_copy') {
-                        var ta = document.createElement('textarea');
-                        ta.value = e.data.text;
-                        ta.setAttribute('readonly', '');
-                        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
-                        document.body.appendChild(ta);
-                        ta.select();
-                        ta.setSelectionRange(0, 999999);
-                        document.execCommand('copy');
-                        document.body.removeChild(ta);
+                    if (e.data && e.data.type === 'clip_copy' && e.data.text) {
+                        var text = e.data.text;
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(text).then(function() {
+                                // 성공 — 오버레이 불필요
+                            }).catch(function() {
+                                // 실패 — 오버레이 표시
+                                document.getElementById('clip-ta').value = text;
+                                document.getElementById('clip-overlay').classList.add('show');
+                            });
+                        } else {
+                            // Clipboard API 없음 — 오버레이 표시
+                            document.getElementById('clip-ta').value = text;
+                            document.getElementById('clip-overlay').classList.add('show');
+                        }
                     }
                 });
                 </script>
