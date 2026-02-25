@@ -746,6 +746,8 @@ def render_html_table(df, col_groups=None):
         clip_footer = st.session_state.get('clip_footer', '')
     except Exception:
         pass
+    if not clip_footer.strip():
+        clip_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
     
     clip_texts = []
     for row_idx, (_, row) in enumerate(df.iterrows()):
@@ -904,14 +906,12 @@ def render_html_table(df, col_groups=None):
             }}).catch(function() {{
                 // 공유 취소 시 복사 팝업으로 대체
                 window.parent.postMessage({{type:'clip_copy', text:text}}, '*');
-                showCopied(btn);
             }});
             return;
         }}
         
-        // 🖥️ PC: 부모 페이지로 복사 요청
+        // 🖥️ PC: 부모 페이지에 복사 팝업 표시
         window.parent.postMessage({{type:'clip_copy', text:text}}, '*');
-        showCopied(btn);
     }}
     function showCopied(btn) {{
         var orig = btn.innerHTML;
@@ -1669,6 +1669,10 @@ elif menu == "매니저 화면 (로그인)":
                     </div>
                 </div>
                 <script>
+                // iframe에 clipboard 권한 부여 시도
+                document.querySelectorAll('iframe').forEach(function(f) {
+                    f.setAttribute('allow', 'clipboard-write; clipboard-read');
+                });
                 function doCopy() {
                     var ta = document.getElementById('clip-ta');
                     var text = ta.value;
@@ -1700,20 +1704,13 @@ elif menu == "매니저 화면 (로그인)":
                 }
                 window.addEventListener('message', function(e) {
                     if (e.data && e.data.type === 'clip_copy' && e.data.text) {
-                        var text = e.data.text;
-                        if (navigator.clipboard && navigator.clipboard.writeText) {
-                            navigator.clipboard.writeText(text).then(function() {
-                                // 성공 — 오버레이 불필요
-                            }).catch(function() {
-                                // 실패 — 오버레이 표시
-                                document.getElementById('clip-ta').value = text;
-                                document.getElementById('clip-overlay').classList.add('show');
-                            });
-                        } else {
-                            // Clipboard API 없음 — 오버레이 표시
-                            document.getElementById('clip-ta').value = text;
-                            document.getElementById('clip-overlay').classList.add('show');
-                        }
+                        document.getElementById('clip-ta').value = e.data.text;
+                        document.getElementById('clip-overlay').classList.add('show');
+                        // 텍스트 자동 선택
+                        setTimeout(function() {
+                            var ta = document.getElementById('clip-ta');
+                            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+                        }, 100);
                     }
                 });
                 </script>
