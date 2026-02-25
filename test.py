@@ -251,6 +251,7 @@ def load_data_and_config():
     st.session_state['col_groups'] = cfg.get('col_groups', []) if isinstance(cfg.get('col_groups'), list) else []
     st.session_state['data_date'] = str(cfg.get('data_date', ''))
     st.session_state['clip_footer'] = str(cfg.get('clip_footer', ''))
+    st.session_state['prize_config'] = cfg.get('prize_config', []) if isinstance(cfg.get('prize_config'), list) else []
     for item in st.session_state['admin_cols']:
         if 'fallback_col' not in item: item['fallback_col'] = ''
     
@@ -278,6 +279,7 @@ def _reset_session_state():
     st.session_state['col_groups'] = []
     st.session_state['data_date'] = ''
     st.session_state['clip_footer'] = ''
+    st.session_state['prize_config'] = []
 
 def has_data():
     df = st.session_state.get('df_merged', None)
@@ -298,6 +300,7 @@ def save_config():
         'col_groups': st.session_state.get('col_groups', []),
         'data_date': st.session_state.get('data_date', ''),
         'clip_footer': st.session_state.get('clip_footer', ''),
+        'prize_config': st.session_state.get('prize_config', []),
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -325,23 +328,8 @@ def save_data_and_config():
     save_config()
 
 # ==========================================
-# 💰 시상금 계산 모듈 (app_data/config.json 연동)
+# 💰 시상금 계산 모듈 (자체 통합 — df_merged 사용)
 # ==========================================
-PRIZE_DATA_DIR = "app_data"
-PRIZE_CONFIG_FILE = os.path.join(PRIZE_DATA_DIR, "config.json")
-
-def _safe_str_prize(val):
-    """사번 정제 (엑셀 외계어 복원, 대문자 통일)"""
-    if pd.isna(val) or val is None: return ""
-    try:
-        if isinstance(val, (int, float)) and float(val).is_integer():
-            val = int(float(val))
-    except: pass
-    s = str(val)
-    s = re.sub(r'_[xX]([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
-    s = re.sub(r'\s+', '', s)
-    if s.endswith('.0'): s = s[:-2]
-    return s.upper()
 
 def _safe_float_prize(val):
     if pd.isna(val) or val is None: return 0.0
@@ -349,52 +337,32 @@ def _safe_float_prize(val):
     try: return float(s)
     except: return 0.0
 
-def load_prize_module():
-    """시상금 config + raw data 로드 (app_data/ 디렉토리에서)"""
-    if not os.path.exists(PRIZE_CONFIG_FILE):
-        return None, {}
-    try:
-        with open(PRIZE_CONFIG_FILE, 'r', encoding='utf-8') as f:
-            prize_config = json.load(f)
-    except:
-        return None, {}
-    # 호환성 보장
-    for c in prize_config:
-        if 'category' not in c: c['category'] = 'weekly'
-    
-    prize_data = {}
-    for fname in os.listdir(PRIZE_DATA_DIR):
-        if fname.endswith('.pkl'):
-            try:
-                prize_data[fname.replace('.pkl', '')] = pd.read_pickle(os.path.join(PRIZE_DATA_DIR, fname))
-            except: pass
-    return prize_config, prize_data
-
-def calculate_prize_for_code(target_code, prize_config, prize_data):
-    """특정 사번의 시상금 계산"""
-    if not prize_config or not prize_data: return [], 0
+def calculate_prize_for_code(target_code, prize_config, df_src):
+    """특정 사번의 시상금을 df_merged에서 계산"""
+    if not prize_config or df_src is None or df_src.empty:
+        return [], 0
     results = []
-    safe_code = _safe_str_prize(target_code)
+    safe_code = clean_key(str(target_code))
     
     for cfg in prize_config:
-        df = prize_data.get(cfg.get('file'))
-        if df is None: continue
         col_code = cfg.get('col_code', '')
-        if not col_code or col_code not in df.columns: continue
+        if not col_code or col_code not in df_src.columns:
+            continue
         
         _cc = f"_pclean_{col_code}"
-        if _cc not in df.columns:
-            df[_cc] = df[col_code].apply(_safe_str_prize)
-        match_df = df[df[_cc] == safe_code]
-        if match_df.empty: continue
+        if _cc not in df_src.columns:
+            df_src[_cc] = df_src[col_code].apply(clean_key)
+        match_df = df_src[df_src[_cc] == safe_code]
+        if match_df.empty:
+            continue
         
         cat = cfg.get('category', 'weekly')
         p_type = cfg.get('type', '구간 시책')
         
         if cat == 'weekly':
             if "1기간" in p_type:
-                raw_prev = match_df[cfg['col_val_prev']].values[0] if cfg.get('col_val_prev') in df.columns else 0
-                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') in df.columns else 0
+                raw_prev = match_df[cfg['col_val_prev']].values[0] if cfg.get('col_val_prev') and cfg['col_val_prev'] in df_src.columns else 0
+                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df_src.columns else 0
                 val_prev, val_curr = _safe_float_prize(raw_prev), _safe_float_prize(raw_curr)
                 curr_req = float(cfg.get('curr_req', 100000.0))
                 calc_rate, tier_prev, prize = 0, 0, 0
@@ -409,7 +377,7 @@ def calculate_prize_for_code(target_code, prize_config, prize_data):
                     "val_prev": val_prev, "val_curr": val_curr, "curr_req": curr_req,
                     "rate": calc_rate, "prize": prize, "shortfall_curr": shortfall_curr})
             elif "2기간" in p_type:
-                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') in df.columns else 0
+                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df_src.columns else 0
                 val_curr = _safe_float_prize(raw_curr)
                 curr_req = float(cfg.get('curr_req', 100000.0))
                 calc_rate, tier_achieved, prize = 0, 0, 0
@@ -425,7 +393,7 @@ def calculate_prize_for_code(target_code, prize_config, prize_data):
                     "val": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
                     "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall})
             else:
-                raw_val = match_df[cfg['col_val']].values[0] if cfg.get('col_val') in df.columns else 0
+                raw_val = match_df[cfg['col_val']].values[0] if cfg.get('col_val') and cfg['col_val'] in df_src.columns else 0
                 val = _safe_float_prize(raw_val)
                 calc_rate, tier_achieved, prize = 0, 0, 0
                 for amt, rate in cfg.get('tiers', []):
@@ -454,7 +422,6 @@ def calculate_prize_for_code(target_code, prize_config, prize_data):
     return results, total
 
 def format_prize_clip_text(results, total):
-    """시상금 → 카톡 복사 텍스트"""
     if not results: return ""
     lines = ["", "💰 예상 시상금 현황", f"  총 시상금: {total:,.0f}원"]
     for r in results:
@@ -467,19 +434,19 @@ def format_prize_clip_text(results, total):
     return '\n'.join(lines)
 
 def build_prize_card_html(results, total):
-    """시상금 → 모바일 카드 HTML"""
     if not results: return ""
-    html = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
-    html += f'<div style="font-weight:800; color:#d9232e; font-size:15px; margin-bottom:6px;">💰 예상 시상금: {total:,.0f}원</div>'
+    h = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
+    h += f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:6px;">💰 예상 시상금: {total:,.0f}원</div>'
     for r in results:
         pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-        html += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+        h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
         if r.get('shortfall', 0) > 0 and r.get('next_tier'):
-            html += f'<div class="m-row m-sc"><span class="m-label">  다음 {int(r["next_tier"]//10000)}만까지</span><span class="m-val">{r["shortfall"]:,.0f}원</span></div>'
+            h += f'<div class="m-row m-sc"><span class="m-label">  다음 {int(r["next_tier"]//10000)}만까지</span><span class="m-val">{r["shortfall"]:,.0f}원</span></div>'
         elif r.get('shortfall_curr', 0) > 0:
-            html += f'<div class="m-row m-sc"><span class="m-label">  당월 필수까지</span><span class="m-val">{r["shortfall_curr"]:,.0f}원</span></div>'
-    html += '</div>'
-    return html
+            h += f'<div class="m-row m-sc"><span class="m-label">  당월 필수까지</span><span class="m-val">{r["shortfall_curr"]:,.0f}원</span></div>'
+    h += '</div>'
+    return h
+
 
 if 'df_merged' not in st.session_state:
     _reset_session_state()
@@ -1753,28 +1720,162 @@ if menu == "관리자 화면 (설정)":
         
         # ========================================
         st.divider()
-        st.header("9. 💰 시상금 계산 연동 (자동 감지)")
-        if os.path.exists(PRIZE_CONFIG_FILE):
+        st.header("9. 💰 시상금 계산 설정")
+        st.caption("시상금 계산 시책을 직접 설정합니다. 매니저 화면의 📋 카톡에 시상금이 포함되고 💰 버튼이 표시됩니다.")
+        
+        prize_cfgs = st.session_state.get('prize_config', [])
+        
+        # ── 주차/브릿지 시상 추가 ──
+        st.markdown("**📌 주차/브릿지 시상**")
+        if st.button("➕ 주차/브릿지 시상 추가", key="add_prize_weekly"):
+            prize_cfgs.append({
+                "name": f"신규 시책 {len(prize_cfgs)+1}", "category": "weekly",
+                "type": "구간 시책", "col_code": "", "col_val": "",
+                "col_val_prev": "", "col_val_curr": "", "curr_req": 100000.0,
+                "tiers": [(500000, 300), (300000, 200), (200000, 200), (100000, 100)]
+            })
+            st.session_state['prize_config'] = prize_cfgs
+            save_data_and_config()
+            st.rerun()
+        
+        weekly_prizes = [(i, c) for i, c in enumerate(prize_cfgs) if c.get('category', 'weekly') == 'weekly']
+        for idx, cfg in weekly_prizes:
+            with st.expander(f"📌 {cfg.get('name', '시책')} ({cfg.get('type', '구간')})", expanded=False):
+                c1, c2 = st.columns([8, 2])
+                with c2:
+                    if st.button("🗑️ 삭제", key=f"del_prize_{idx}"):
+                        prize_cfgs.pop(idx)
+                        st.session_state['prize_config'] = prize_cfgs
+                        save_data_and_config()
+                        st.rerun()
+                
+                cfg['name'] = st.text_input("시책명", value=cfg.get('name', ''), key=f"pname_{idx}")
+                
+                type_idx = 0
+                if "1기간" in cfg.get('type', ''): type_idx = 1
+                elif "2기간" in cfg.get('type', ''): type_idx = 2
+                cfg['type'] = st.radio("시책 종류", 
+                    ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 차월 달성 조건)"],
+                    index=type_idx, horizontal=True, key=f"ptype_{idx}")
+                
+                cols = available_columns
+                def _gi(v, opts): return opts.index(v) if v in opts else 0
+                
+                cfg['col_code'] = st.selectbox("설계사코드(사번) 열", cols, index=_gi(cfg.get('col_code',''), cols), key=f"pccode_{idx}")
+                
+                if "1기간" in cfg['type']:
+                    c1, c2 = st.columns(2)
+                    with c1: cfg['col_val_prev'] = st.selectbox("전월 실적 열", cols, index=_gi(cfg.get('col_val_prev',''), cols), key=f"pprev_{idx}")
+                    with c2: cfg['col_val_curr'] = st.selectbox("당월 실적 열", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr_{idx}")
+                    cfg['curr_req'] = st.number_input("당월 필수 달성 금액", value=float(cfg.get('curr_req', 100000)), step=10000.0, key=f"preq_{idx}")
+                elif "2기간" in cfg['type']:
+                    cfg['col_val_curr'] = st.selectbox("당월 실적 열", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr2_{idx}")
+                    cfg['curr_req'] = st.number_input("차월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000)), step=10000.0, key=f"preq2_{idx}")
+                else:
+                    cfg['col_val'] = st.selectbox("실적 수치 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
+                
+                st.markdown("**구간 설정** (달성금액, 지급률%) — 한 줄에 하나씩")
+                tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
+                tier_input = st.text_area("예: 500000,300", value=tier_str, height=120, key=f"ptier_{idx}")
+                try:
+                    new_tiers = []
+                    for line in tier_input.strip().split('\n'):
+                        if ',' in line:
+                            parts = line.split(',')
+                            new_tiers.append((float(parts[0].strip()), float(parts[1].strip())))
+                    cfg['tiers'] = sorted(new_tiers, key=lambda x: x[0], reverse=True)
+                except:
+                    st.error("구간 형식이 올바르지 않습니다.")
+                
+                if st.button("💾 이 시책 저장", key=f"psave_{idx}"):
+                    st.session_state['prize_config'] = prize_cfgs
+                    save_data_and_config()
+                    st.success(f"'{cfg['name']}' 저장됨")
+        
+        st.markdown("---")
+        
+        # ── 누계 시상 추가 ──
+        st.markdown("**📈 월간 누계 시상**")
+        if st.button("➕ 누계 시상 추가", key="add_prize_cumul"):
+            prize_cfgs.append({
+                "name": f"신규 누계 {len(prize_cfgs)+1}", "category": "cumulative",
+                "type": "누계", "col_code": "", "col_val": "", "col_prize": ""
+            })
+            st.session_state['prize_config'] = prize_cfgs
+            save_data_and_config()
+            st.rerun()
+        
+        cumul_prizes = [(i, c) for i, c in enumerate(prize_cfgs) if c.get('category') == 'cumulative']
+        for idx, cfg in cumul_prizes:
+            with st.expander(f"📈 {cfg.get('name', '누계')}", expanded=False):
+                c1, c2 = st.columns([8, 2])
+                with c2:
+                    if st.button("🗑️ 삭제", key=f"del_prize_{idx}"):
+                        prize_cfgs.pop(idx)
+                        st.session_state['prize_config'] = prize_cfgs
+                        save_data_and_config()
+                        st.rerun()
+                
+                cols = available_columns
+                def _gi(v, opts): return opts.index(v) if v in opts else 0
+                
+                cfg['name'] = st.text_input("누계 항목명", value=cfg.get('name', ''), key=f"pname_{idx}")
+                cfg['col_code'] = st.selectbox("설계사코드(사번) 열", cols, index=_gi(cfg.get('col_code',''), cols), key=f"pccode_{idx}")
+                cfg['col_val'] = st.selectbox("누계 실적 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
+                cfg['col_prize'] = st.selectbox("확정 시상금 열", cols, index=_gi(cfg.get('col_prize',''), cols), key=f"pprize_{idx}")
+                
+                if st.button("💾 이 항목 저장", key=f"psave_{idx}"):
+                    st.session_state['prize_config'] = prize_cfgs
+                    save_data_and_config()
+                    st.success(f"'{cfg['name']}' 저장됨")
+        
+        if not prize_cfgs:
+            st.info("시상금 시책이 없습니다. 위 버튼으로 추가하거나, 아래에서 기존 앱의 설정을 가져오세요.")
+        
+        st.markdown("---")
+        st.markdown("**📥 기존 시상금 앱에서 설정 가져오기**")
+        st.caption("기존 시상금 계산 앱의 config.json 파일을 업로드하면 시책 설정이 자동으로 변환됩니다.")
+        json_file = st.file_uploader("config.json 파일 업로드", type=['json'], key="import_prize_json")
+        if json_file is not None:
             try:
-                with open(PRIZE_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    p_cfg = json.load(f)
-                weekly_cnt = sum(1 for c in p_cfg if c.get('category', 'weekly') == 'weekly')
-                cumul_cnt = sum(1 for c in p_cfg if c.get('category') == 'cumulative')
-                
-                # raw data 파일 수 확인
-                pkl_cnt = sum(1 for f in os.listdir(PRIZE_DATA_DIR) if f.endswith('.pkl'))
-                
-                st.success(f"✅ 시상금 계산 모듈 연동됨 | 주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개 시책 | 데이터 파일 {pkl_cnt}개")
-                st.caption("시상금 계산 앱(app_data/config.json)의 설정이 자동으로 반영됩니다. 매니저 화면에서 📋 카톡 보내기에 시상금이 포함되고, 💰 시상금 조회 버튼이 표시됩니다.")
-                
-                with st.expander("📋 연동된 시상 항목 목록"):
-                    for i, c in enumerate(p_cfg):
-                        cat_icon = "📌" if c.get('category', 'weekly') == 'weekly' else "📈"
-                        st.markdown(f"{cat_icon} **{c.get('name', f'항목 {i+1}')}** ({c.get('type', '구간')}) — 파일: `{c.get('file', '?')}`")
-            except Exception as e:
-                st.error(f"config.json 읽기 오류: {e}")
-        else:
-            st.info("💡 시상금 계산 앱의 설정 파일(app_data/config.json)이 없습니다. 시상금 계산 앱에서 시책을 설정하면 자동으로 연동됩니다.")
+                imported = json.load(json_file)
+                if not isinstance(imported, list):
+                    st.error("올바른 config.json 형식이 아닙니다.")
+                else:
+                    # 호환성 처리
+                    for c in imported:
+                        if 'category' not in c: c['category'] = 'weekly'
+                        # file 키 제거 (우리 앱은 df_merged 사용)
+                        c.pop('file', None)
+                        c.pop('col_name', None)
+                        c.pop('col_branch', None)
+                        c.pop('col_agency', None)
+                        c.pop('col_manager_code', None)
+                        c.pop('col_manager', None)
+                    
+                    weekly_cnt = sum(1 for c in imported if c.get('category', 'weekly') == 'weekly')
+                    cumul_cnt = sum(1 for c in imported if c.get('category') == 'cumulative')
+                    st.success(f"✅ {len(imported)}개 시책 감지됨 (주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개)")
+                    
+                    for c in imported:
+                        st.markdown(f"- {'📌' if c.get('category')=='weekly' else '📈'} **{c.get('name', '?')}** ({c.get('type', '?')})")
+                    
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("✅ 기존 설정에 추가 (병합)", key="merge_json"):
+                            prize_cfgs.extend(imported)
+                            st.session_state['prize_config'] = prize_cfgs
+                            save_data_and_config()
+                            st.success("기존 설정에 추가 완료!")
+                            st.rerun()
+                    with col_b:
+                        if st.button("🔄 기존 설정 대체 (교체)", key="replace_json"):
+                            st.session_state['prize_config'] = imported
+                            save_data_and_config()
+                            st.success("설정 교체 완료!")
+                            st.rerun()
+            except json.JSONDecodeError:
+                st.error("JSON 파일 형식이 올바르지 않습니다.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
@@ -1985,36 +2086,38 @@ elif menu == "매니저 화면 (로그인)":
                 # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
                 col_groups = st.session_state.get('col_groups', [])
                 
-                # 💰 시상금 계산 (app_data/config.json 연동)
+                # 💰 시상금 계산 (자체 통합 — prize_config + df_merged)
                 prize_data_map = {}
                 try:
-                    prize_config, prize_raw = load_prize_module()
-                    if prize_config and prize_raw:
-                        # 사번 열 찾기: _unified_search_key 또는 merge key 또는 설계사코드 포함 열
-                        code_col = None
-                        if '_unified_search_key' in my_df.columns:
-                            code_col = '_unified_search_key'
-                        else:
-                            for c in my_df.columns:
-                                if '설계사코드' in c or '사번' in c:
-                                    code_col = c; break
-                            if not code_col:
-                                mk1 = st.session_state.get('merge_key1_col', '')
-                                if mk1 and mk1 in my_df.columns:
-                                    code_col = mk1
-                        
-                        if code_col:
-                            for row_idx, (_, row) in enumerate(final_df.iterrows()):
-                                orig_idx = row.name  # 원본 인덱스
-                                if orig_idx in my_df.index:
-                                    raw_code = my_df.loc[orig_idx, code_col] if code_col in my_df.columns else ''
-                                    agent_code = clean_key(str(raw_code)) if not pd.isna(raw_code) else ''
-                                    if agent_code:
-                                        results, total = calculate_prize_for_code(agent_code, prize_config, prize_raw)
-                                        if results:
-                                            prize_data_map[row_idx] = (results, total)
+                    prize_config = st.session_state.get('prize_config', [])
+                    if prize_config:
+                        df_full = st.session_state.get('df_merged', pd.DataFrame())
+                        if not df_full.empty:
+                            # 사번 열 찾기
+                            code_col = None
+                            if '_unified_search_key' in my_df.columns:
+                                code_col = '_unified_search_key'
+                            else:
+                                for c in my_df.columns:
+                                    if '설계사코드' in c or '사번' in c:
+                                        code_col = c; break
+                                if not code_col:
+                                    mk1 = st.session_state.get('merge_key1_col', '')
+                                    if mk1 and mk1 in my_df.columns:
+                                        code_col = mk1
+                            
+                            if code_col:
+                                for row_idx, (_, row) in enumerate(final_df.iterrows()):
+                                    orig_idx = row.name
+                                    if orig_idx in my_df.index:
+                                        raw_code = my_df.loc[orig_idx, code_col] if code_col in my_df.columns else ''
+                                        agent_code = clean_key(str(raw_code)) if not pd.isna(raw_code) else ''
+                                        if agent_code:
+                                            results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
+                                            if results:
+                                                prize_data_map[row_idx] = (results, total)
                 except Exception:
-                    pass  # 시상금 계산 실패해도 테이블은 정상 표시
+                    pass
                 
                 table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
                 
