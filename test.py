@@ -716,18 +716,19 @@ def render_html_table(df, col_groups=None):
             break
     
     # 식별 열 vs 데이터 열 분류
-    person_keywords = ['설계사', '성명', '이름', '팀장', '대리점', '지사', '소속', '본부', '지점', '부서']
+    # 카톡 이름줄: 지사명 + 설계사명 딱 2개만
+    clip_name_keywords = ['지사', '설계사명', '성명', '이름', '팀장명']
     goal_keywords = ['다음목표', '부족금액']
     
-    id_cols = []  # 인적사항 열 (이름줄에 합침)
-    data_cols = []  # 실적 데이터 열 (본문에 표시)
+    clip_name_cols = []
+    data_cols = []
     for c in columns:
         if c == '순번' or c == '맞춤분류':
             continue
         if any(kw in c for kw in goal_keywords):
             data_cols.append(c)
-        elif any(kw in c for kw in person_keywords):
-            id_cols.append(c)
+        elif any(kw in c for kw in clip_name_keywords) and '코드' not in c and '번호' not in c:
+            clip_name_cols.append(c)
         else:
             data_cols.append(c)
     
@@ -752,12 +753,12 @@ def render_html_table(df, col_groups=None):
     clip_texts = []
     for row_idx, (_, row) in enumerate(df.iterrows()):
         # 인적사항 조합: 대리점명 + 이름 + "팀장님"
-        id_parts = []
-        for c in id_cols:
+        name_parts = []
+        for c in clip_name_cols:
             v = str(row[c]) if not pd.isna(row[c]) else ''
             if v.strip() and v != '0':
-                id_parts.append(v.strip())
-        person_line = ' '.join(id_parts)
+                name_parts.append(v.strip())
+        person_line = ' '.join(name_parts)
         if person_line and not person_line.endswith('님'):
             person_line += ' 팀장님'
         
@@ -771,6 +772,9 @@ def render_html_table(df, col_groups=None):
         
         current_group = None
         for c in data_cols:
+            # 코드 열은 카톡 복사에서 제외
+            if '코드' in c or '번호' in c:
+                continue
             val = str(row[c]) if not pd.isna(row[c]) else ''
             if not val.strip() or val == '0':
                 continue
@@ -815,12 +819,12 @@ def render_html_table(df, col_groups=None):
     
     for row_idx, (_, row) in enumerate(df.iterrows()):
         # 인적사항 조합
-        id_parts_card = []
-        for c in id_cols:
+        name_parts_card = []
+        for c in clip_name_cols:
             v = str(row[c]) if not pd.isna(row[c]) else ''
             if v.strip() and v != '0':
-                id_parts_card.append(v.strip())
-        person_card = ' '.join(id_parts_card) if id_parts_card else ''
+                name_parts_card.append(v.strip())
+        person_card = ' '.join(name_parts_card) if name_parts_card else ''
         
         # 이름만 추출 (카드 헤더 굵은 글씨용)
         name_val = str(row.get(name_col, '')) if name_col else (person_card or '')
@@ -854,7 +858,7 @@ def render_html_table(df, col_groups=None):
         html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button></div>'
         
         # 인적사항 (이름 외 추가 정보)
-        for c in id_cols:
+        for c in clip_name_cols:
             if c == name_col:
                 continue
             val = str(row[c]) if not pd.isna(row[c]) else ''
@@ -884,6 +888,26 @@ def render_html_table(df, col_groups=None):
         html += '</div></div>'  # m-card-body, m-card
     
     html += '</div>'  # mobile-view
+    
+    # ── 복사 팝업 오버레이 (iframe 내부) ──
+    html += """
+    <div id="clip-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
+        onclick="if(event.target===this){this.style.display='none';}">
+        <div style="background:#fff; border-radius:16px; padding:20px; width:100%;
+            max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+            <h3 style="margin:0 0 10px; font-size:16px;">📋 아래 텍스트를 복사하세요</h3>
+            <textarea id="clip-ta" style="width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
+                padding:10px; font-size:14px; resize:none; font-family:inherit; box-sizing:border-box;"></textarea>
+            <button id="clip-copy-btn" onclick="doCopyOverlay()" style="margin-top:10px; width:100%; padding:12px;
+                border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
+                background:#FEE500; color:#3C1E1E;">📋 복사하기</button>
+            <button onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
+                width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
+                cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
+        </div>
+    </div>
+    """
 
     # ── JavaScript ──
     html += f"""
@@ -904,14 +928,90 @@ def render_html_table(df, col_groups=None):
             navigator.share({{ text: text }}).then(function() {{
                 showCopied(btn);
             }}).catch(function() {{
-                // 공유 취소 시 복사 팝업으로 대체
-                window.parent.postMessage({{type:'clip_copy', text:text}}, '*');
+                fallbackCopy(text, btn);
             }});
             return;
         }}
         
-        // 🖥️ PC: 부모 페이지에 복사 팝업 표시
-        window.parent.postMessage({{type:'clip_copy', text:text}}, '*');
+        // 🖥️ PC: 동일 클릭 이벤트 내에서 즉시 복사 시도
+        fallbackCopy(text, btn);
+    }}
+    function fallbackCopy(text, btn) {{
+        // 방법 1: 임시 textarea + execCommand (user gesture 내)
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, 999999);
+        var ok = false;
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(ta);
+        
+        if (ok) {{
+            showCopied(btn);
+            return;
+        }}
+        
+        // 방법 2: Clipboard API
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                showCopied(btn);
+            }}).catch(function() {{
+                showOverlay(text);
+            }});
+            return;
+        }}
+        
+        // 방법 3: 오버레이 (수동 복사)
+        showOverlay(text);
+    }}
+    function showOverlay(text) {{
+        var ov = document.getElementById('clip-overlay');
+        var ta = document.getElementById('clip-ta');
+        ta.value = text;
+        ov.style.display = 'flex';
+        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
+    }}
+    function doCopyOverlay() {{
+        var ta = document.getElementById('clip-ta');
+        var text = ta.value;
+        
+        // 임시 textarea로 복사 (오버레이 textarea 대신 새로 만들어서)
+        var tmp = document.createElement('textarea');
+        tmp.value = text;
+        tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(tmp);
+        tmp.focus();
+        tmp.select();
+        tmp.setSelectionRange(0, 999999);
+        var ok = false;
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(tmp);
+        
+        if (!ok) {{
+            // 원래 textarea로도 시도
+            ta.readOnly = false;
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
+            ta.readOnly = true;
+        }}
+        
+        var btn = document.getElementById('clip-copy-btn');
+        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
+        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
+        if (ok) {{
+            setTimeout(function() {{
+                document.getElementById('clip-overlay').style.display = 'none';
+                btn.textContent = '📋 복사하기';
+                btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
+            }}, 1200);
+        }} else {{
+            // 실패 시 textarea를 편집 가능하게 열어두고 선택 상태 유지
+            ta.readOnly = false;
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+        }}
     }}
     function showCopied(btn) {{
         var orig = btn.innerHTML;
@@ -1634,87 +1734,6 @@ elif menu == "매니저 화면 (로그인)":
                 # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
                 col_groups = st.session_state.get('col_groups', [])
                 table_html = render_html_table(final_df, col_groups=col_groups)
-                
-                # 부모 페이지: 클립보드 복사 핸들러 (iframe 외부에서 실행)
-                st.markdown("""
-                <style>
-                #clip-overlay {
-                    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-                    background:rgba(0,0,0,0.5); z-index:99999;
-                    justify-content:center; align-items:center; padding:20px;
-                }
-                #clip-overlay.show { display:flex; }
-                #clip-box {
-                    background:#fff; border-radius:16px; padding:20px; width:100%;
-                    max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);
-                }
-                #clip-box h3 { margin:0 0 10px; font-size:16px; }
-                #clip-ta {
-                    width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
-                    padding:10px; font-size:14px; resize:none; font-family:inherit;
-                }
-                #clip-box button {
-                    margin-top:10px; width:100%; padding:12px; border:none; border-radius:10px;
-                    font-size:15px; font-weight:700; cursor:pointer;
-                }
-                #clip-copy-btn { background:#FEE500; color:#3C1E1E; }
-                #clip-close-btn { background:#f2f4f6; color:#333; margin-top:6px; }
-                </style>
-                <div id="clip-overlay" onclick="if(event.target===this)this.classList.remove('show')">
-                    <div id="clip-box">
-                        <h3>📋 아래 텍스트를 복사하세요</h3>
-                        <textarea id="clip-ta" readonly></textarea>
-                        <button id="clip-copy-btn" onclick="doCopy()">📋 복사하기</button>
-                        <button id="clip-close-btn" onclick="document.getElementById('clip-overlay').classList.remove('show')">닫기</button>
-                    </div>
-                </div>
-                <script>
-                // iframe에 clipboard 권한 부여 시도
-                document.querySelectorAll('iframe').forEach(function(f) {
-                    f.setAttribute('allow', 'clipboard-write; clipboard-read');
-                });
-                function doCopy() {
-                    var ta = document.getElementById('clip-ta');
-                    var text = ta.value;
-                    // Clipboard API 시도
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(text).then(function() {
-                            var btn = document.getElementById('clip-copy-btn');
-                            btn.textContent = '✅ 복사 완료!';
-                            btn.style.background = '#22C55E';
-                            btn.style.color = '#fff';
-                            setTimeout(function() { document.getElementById('clip-overlay').classList.remove('show'); btn.textContent='📋 복사하기'; btn.style.background='#FEE500'; btn.style.color='#3C1E1E'; }, 1200);
-                        }).catch(function() { manualCopy(); });
-                    } else {
-                        manualCopy();
-                    }
-                }
-                function manualCopy() {
-                    var ta = document.getElementById('clip-ta');
-                    ta.readOnly = false;
-                    ta.focus(); ta.select();
-                    ta.setSelectionRange(0, 999999);
-                    try { document.execCommand('copy'); } catch(e) {}
-                    ta.readOnly = true;
-                    var btn = document.getElementById('clip-copy-btn');
-                    btn.textContent = '✅ 복사 완료!';
-                    btn.style.background = '#22C55E';
-                    btn.style.color = '#fff';
-                    setTimeout(function() { document.getElementById('clip-overlay').classList.remove('show'); btn.textContent='📋 복사하기'; btn.style.background='#FEE500'; btn.style.color='#3C1E1E'; }, 1200);
-                }
-                window.addEventListener('message', function(e) {
-                    if (e.data && e.data.type === 'clip_copy' && e.data.text) {
-                        document.getElementById('clip-ta').value = e.data.text;
-                        document.getElementById('clip-overlay').classList.add('show');
-                        // 텍스트 자동 선택
-                        setTimeout(function() {
-                            var ta = document.getElementById('clip-ta');
-                            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-                        }, 100);
-                    }
-                });
-                </script>
-                """, unsafe_allow_html=True)
                 
                 # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
