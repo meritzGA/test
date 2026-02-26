@@ -41,10 +41,26 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .metric-card .mc-sub { font-size:10px; color:var(--text3); }
 .metric-card.active { border-color:rgba(var(--mr),0.25); background:rgba(var(--mr),0.04); }
 .metric-card.active .mc-val { color:var(--red); }
-/* 리스트 버튼 — 왼쪽 정렬, 줄바꿈 */
-.stButton > button { border-radius:10px !important; font-weight:500 !important; border:1px solid var(--border) !important; text-align:left !important; justify-content:flex-start !important; padding:6px 10px !important; font-size:12px !important; transition:all .1s !important; white-space:normal !important; word-break:break-all !important; line-height:1.4 !important; }
-.stButton > button:hover { background:#f0f1f3 !important; border-color:#d5d8db !important; }
-.stButton > button[kind="primary"],[data-testid="stFormSubmitButton"]>button { background:rgb(var(--mr)) !important; color:#fff !important; border:none !important; text-align:center !important; justify-content:center !important; }
+/* 일반 버튼 */
+.stButton > button { border-radius:8px !important; font-weight:600 !important; border:1px solid var(--border) !important; text-align:center !important; justify-content:center !important; padding:3px 10px !important; font-size:12px !important; transition:all .1s !important; color:var(--text2) !important; }
+.stButton > button:hover { background:rgba(var(--mr),0.06) !important; border-color:rgba(var(--mr),0.3) !important; color:rgb(var(--mr)) !important; }
+/* Primary 버튼 */
+.stButton > button[kind="primary"],[data-testid="stFormSubmitButton"]>button { background:rgb(var(--mr)) !important; color:#fff !important; border:none !important; padding:6px 10px !important; font-size:13px !important; }
+/* 리스트 카드 */
+.lc { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:7px 10px 5px; margin-bottom:0; }
+.lc-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
+.lc-info { flex:1; min-width:0; }
+.lc-org { font-size:10px; color:var(--text3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.2; }
+.lc-name { font-size:13px; font-weight:700; color:var(--text1); line-height:1.2; }
+.lc-perfs { display:flex; gap:3px; flex-shrink:0; }
+.lc-pill { display:inline-flex; align-items:center; justify-content:center; min-width:40px; height:20px; border-radius:10px; font-size:10px; font-weight:700; padding:0 5px; }
+.lc-pill.r { background:rgba(var(--mr),0.1); color:rgb(var(--mr)); }
+.lc-pill.g { background:#e8f5e9; color:#2e7d32; }
+.lc-bottom { display:flex; gap:3px; margin-top:4px; }
+.lc-dot { display:flex; align-items:center; gap:2px; font-size:9px; color:var(--text3); padding:1px 4px; border-radius:4px; background:#f7f8fa; }
+.lc-dot.done { background:rgba(0,196,113,0.1); color:#00a85e; font-weight:600; }
+.lc-dot .dot { width:5px; height:5px; border-radius:50%; background:#d5d8db; flex-shrink:0; }
+.lc-dot.done .dot { background:#00c471; }
 /* 사용인 정보 카드 */
 .info-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:10px 14px; margin-bottom:6px; }
 .info-card .ic-name { font-size:20px; font-weight:800; color:var(--text1); }
@@ -582,20 +598,20 @@ elif menu=="📱 매니저 화면":
         srch=st.text_input("🔍",placeholder="이름/소속 검색",key="cs",label_visibility="collapsed")
         fdf=my.copy()
         if srch: fdf=fdf[fdf.apply(lambda r: srch.lower() in str(r.values).lower(),axis=1)]
-        list_c=st.container(height=520)
+        list_c=st.container(height=600)
         with list_c:
+            dot_labels={1:"인사",2:"리플렛",3:"시상",4:"종합"}
             for idx,row in fdf.iterrows():
                 co=resolve_val(row,_cba,_cbb) or resolve_val(row,'현재대리점지사명','대리점지사명')
                 cn=resolve_val(row,_cna,_cnb) or resolve_val(row,'현재대리점설계사조직명','대리점설계사명') or safe_str(row.get('본인고객번호',''))
                 cc_=resolve_val(row,_cca,_ccb) or resolve_val(row,'현재대리점설계사조직코드','대리점설계사조직코드')
                 cnum=safe_str(row.get('본인고객번호','')) or safe_str(row.get('_search_key',''))
                 logs=get_cust_logs(mgr_c,cnum) if cnum else []; stypes=set(l['message_type'] for l in logs)
-                bg=" ".join('🟢' if mt in stypes else '⚪' for mt in [1,2,3,4])
-                # 실적 현황 (관리자 설정 항목)
-                perf_parts=[]
+                # 실적 pill
+                pills_h=""
                 if dcfg:
                     rd=row.to_dict()
-                    for col in dcfg:
+                    for ci,col in enumerate(dcfg):
                         val=rd.get(col)
                         if val is None:
                             for sfx in ['_파일1','_파일2']:
@@ -604,13 +620,24 @@ elif menu=="📱 매니저 화면":
                         if not dv or dv in ('0','0.0'): continue
                         if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
                         if dv:
-                            # 짧은 라벨 (주차 숫자만 추출 등)
-                            short_lbl=col.replace('주차','w').replace('인보험','인').replace('자동차','차').replace('장기','장').replace('실적','')
-                            if len(short_lbl)>6: short_lbl=short_lbl[:6]
-                            perf_parts.append(f"{short_lbl}{dv}")
-                bl=f"{co} | {cn}" if co else cn
-                perf_str=f"  [{' / '.join(perf_parts)}]" if perf_parts else ""
-                if st.button(f"{bl}  {bg}{perf_str}",key=f"c_{idx}",use_container_width=True):
+                            pcls='r' if ci%2==0 else 'g'
+                            pills_h+=f"<span class='lc-pill {pcls}'>{dv}</span>"
+                # 발송 dots
+                dots_h=""
+                for mt_id,mt_lbl in dot_labels.items():
+                    dc='done' if mt_id in stypes else ''
+                    dots_h+=f"<span class='lc-dot {dc}'><span class='dot'></span>{mt_lbl}</span>"
+                # 카드 HTML
+                org_h=f"<div class='lc-org'>{co}</div>" if co else ""
+                card_h=f"""<div class='lc'>
+                    <div class='lc-top'>
+                        <div class='lc-info'>{org_h}<div class='lc-name'>{cn}</div></div>
+                        <div class='lc-perfs'>{pills_h}</div>
+                    </div>
+                    <div class='lc-bottom'>{dots_h}</div>
+                </div>"""
+                st.markdown(card_h,unsafe_allow_html=True)
+                if st.button(f"▸ {cn}",key=f"c_{idx}",use_container_width=True):
                     cr={k:(safe_str(v) if not isinstance(v,(int,float,np.integer,np.floating)) or pd.isna(v) else v) for k,v in row.to_dict().items()}
                     st.session_state['sel_cust']={'idx':idx,'name':cn,'org':co,'code':cc_,'num':cnum,'row':cr}; st.rerun()
 
