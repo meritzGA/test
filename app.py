@@ -46,30 +46,34 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .stButton > button:hover { background:#f0f1f3 !important; border-color:#d5d8db !important; }
 .stButton > button[kind="primary"],[data-testid="stFormSubmitButton"]>button { background:rgb(var(--mr)) !important; color:#fff !important; border:none !important; text-align:center !important; justify-content:center !important; }
 /* 사용인 정보 카드 */
-.info-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
-.info-card .ic-name { font-size:18px; font-weight:800; color:var(--text1); }
-.info-card .ic-meta { font-size:12px; color:var(--text2); margin-top:2px; }
-.info-badges { display:flex; gap:4px; margin-top:8px; }
-.info-badges .ib { padding:2px 7px; border-radius:5px; font-size:10px; font-weight:600; }
+.info-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:10px 14px; margin-bottom:6px; }
+.info-card .ic-name { font-size:20px; font-weight:800; color:var(--text1); }
+.info-card .ic-meta { font-size:13px; color:var(--text2); margin-top:2px; }
+.info-badges { display:flex; gap:4px; margin-top:6px; }
+.info-badges .ib { padding:2px 8px; border-radius:5px; font-size:11px; font-weight:600; }
 .info-badges .ib.done { background:#e8f8ef; color:#00a85e; }
 .info-badges .ib.wait { background:#f2f4f6; color:#c4c9d0; }
 /* 컴팩트 시상 라인 */
-.prize-line { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--card); border:1px solid var(--border); border-radius:10px; margin-bottom:6px; flex-wrap:wrap; }
+.prize-line { display:flex; align-items:center; gap:6px; padding:7px 10px; background:var(--card); border:1px solid var(--border); border-radius:10px; margin-bottom:4px; flex-wrap:wrap; }
 .prize-line.achieved { border-left:3px solid var(--green); }
 .prize-line.partial { border-left:3px solid #ff9500; }
 .prize-line.none { border-left:3px solid #e5e8eb; }
-.pl-name { font-size:12px; font-weight:700; color:var(--text1); min-width:100px; }
-.pl-chip { font-size:11px; padding:2px 8px; border-radius:6px; font-weight:600; white-space:nowrap; }
+.pl-name { font-size:13px; font-weight:700; color:var(--text1); min-width:90px; }
+.pl-chip { font-size:12px; padding:2px 8px; border-radius:6px; font-weight:600; white-space:nowrap; }
 .pl-chip.perf { background:#f0f1f3; color:var(--text1); }
 .pl-chip.target { background:#fff3e0; color:#e65100; }
 .pl-chip.short { background:#fce4ec; color:#c62828; }
 .pl-chip.ok { background:#e8f5e9; color:#2e7d32; }
 .pl-chip.prize { background:#fff8e1; color:#f57f17; }
 /* 컴팩트 실적 */
-.perf-inline { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0; }
-.perf-tag { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:3px 8px; font-size:11px; }
-.perf-tag .pk { color:var(--text3); margin-right:3px; font-size:10px; }
+.perf-inline { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0; }
+.perf-tag { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:3px 8px; font-size:12px; }
+.perf-tag .pk { color:var(--text3); margin-right:3px; font-size:11px; }
 .perf-tag .pv { font-weight:700; color:var(--text1); }
+/* 활동률 바 */
+.act-bar-wrap { background:#f0f1f3; border-radius:6px; height:20px; position:relative; overflow:hidden; }
+.act-bar-fill { height:100%; border-radius:6px; background:linear-gradient(90deg,rgb(128,0,0),rgb(180,40,40)); transition:width .3s; }
+.act-bar-text { position:absolute; top:0; left:0; right:0; text-align:center; font-size:11px; font-weight:700; color:#fff; line-height:20px; }
 /* 파일 카드 */
 .file-card { background:var(--card); border-radius:12px; padding:14px; border:1px solid var(--border); margin-bottom:6px; }
 .file-card.loaded { border-color:rgba(0,196,113,0.3); background:rgba(0,196,113,0.02); }
@@ -217,6 +221,18 @@ def save_data():
 
 def has_data():
     df=st.session_state.get('df_merged'); return isinstance(df,pd.DataFrame) and not df.empty
+
+USER_PREFS_FILE = "user_prefs.pkl"
+def load_user_prefs():
+    if os.path.exists(USER_PREFS_FILE):
+        try:
+            with open(USER_PREFS_FILE,'rb') as f: return pickle.load(f)
+        except: pass
+    return {}
+def save_user_prefs(prefs):
+    try:
+        with open(USER_PREFS_FILE,'wb') as f: pickle.dump(prefs,f)
+    except: pass
 
 # =============================================================
 # 3. SQLite
@@ -556,7 +572,7 @@ elif menu=="📱 매니저 화면":
             cn=sel['name']; cnum=sel['num']; co=sel['org']; cc_=sel.get('code',''); crow=sel['row']
             det_c=st.container(height=580)
             with det_c:
-                # 정보카드
+                # 정보카드 (컴팩트)
                 logs=get_cust_logs(mgr_c,cnum); stypes=set(l['message_type'] for l in logs)
                 ih=f"<div class='info-card'><div class='ic-name'>{cn}</div>"
                 meta_parts=[]
@@ -568,7 +584,8 @@ elif menu=="📱 매니저 화면":
                     ih+=f"<span class='ib {'done' if mt in stypes else 'wait'}'>{lb}{'✓' if mt in stypes else ''}</span>"
                 ih+="</div></div>"; st.markdown(ih,unsafe_allow_html=True)
 
-                # 실적 태그
+                # 실적 + 시상 밀착 배치
+                has_perf=False
                 if dcfg:
                     pt=[]
                     for col in dcfg:
@@ -581,28 +598,28 @@ elif menu=="📱 매니저 화면":
                         if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
                         if dv: pt.append((col,dv))
                     if pt:
+                        has_perf=True
                         ph="<div class='perf-inline'>"
                         for k,v in pt: ph+=f"<span class='perf-tag'><span class='pk'>{k}</span><span class='pv'>{v}</span></span>"
                         ph+="</div>"; st.markdown(ph,unsafe_allow_html=True)
 
-                # 시상 — 한줄 컴팩트
                 if pcfg:
                     prs=calc_prize(crow,pcfg)
-                    ph="<div style='margin:4px 0;'>"
+                    ph="<div style='margin:2px 0;'>"
                     for pr in prs: ph+=prize_line_html(pr)
                     ph+="</div>"; st.markdown(ph,unsafe_allow_html=True)
 
                 # 메시지
-                st.markdown("<p style='font-size:13px;font-weight:700;margin:8px 0 4px;color:var(--text2);'>📤 메시지</p>",unsafe_allow_html=True)
+                st.markdown("<p style='font-size:14px;font-weight:700;margin:6px 0 2px;color:var(--text2);'>📤 메시지</p>",unsafe_allow_html=True)
                 t1,t2,t3,t4=st.tabs(["①인사","②리플렛","③시상","④종합"])
 
                 with t1:
-                    # 인사말 — 세션 전역 유지 (수정 전까지)
-                    saved_gr=st.session_state.get('_saved_greeting','')
+                    # 인사말 — 파일 영구 저장
+                    prefs=load_user_prefs(); saved_gr=prefs.get('greeting','')
                     gr=st.text_area("인사말",value=saved_gr,placeholder="안녕하세요! 이번 달도 화이팅입니다!",key=f"g_{cnum}",height=60)
                     if st.button("💬 저장 & 생성",key=f"gb_{cnum}",use_container_width=True):
                         if gr:
-                            st.session_state['_saved_greeting']=gr
+                            prefs['greeting']=gr; save_user_prefs(prefs)
                             st.session_state[f'msg1_{cnum}']=f"안녕하세요, {cn}님!\n{mgr_n} 매니저입니다.\n\n{gr}"
                         else: st.warning("입력하세요")
                     sm=st.session_state.get(f'msg1_{cnum}','')
@@ -615,18 +632,18 @@ elif menu=="📱 매니저 화면":
                         if st.button("✅ 기록",key=f"l1_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,1); st.success("✅"); st.rerun()
 
                 with t2:
-                    # 리플렛 — 세션 전역 유지
-                    if 'saved_leaflet' not in st.session_state: st.session_state['saved_leaflet']=None; st.session_state['saved_leaflet_name']=''
-                    lf=st.file_uploader("이미지 업로드 (한번 저장하면 유지)",type=["png","jpg","jpeg"],key=f"lf_{cnum}")
+                    # 리플렛 — 파일 영구 저장
+                    prefs=load_user_prefs()
+                    lf=st.file_uploader("이미지 (한번 저장하면 유지)",type=["png","jpg","jpeg"],key=f"lf_{cnum}")
                     if lf:
-                        st.session_state['saved_leaflet']=lf.getvalue(); st.session_state['saved_leaflet_name']=lf.name
-                    lb=st.session_state.get('saved_leaflet'); ln=st.session_state.get('saved_leaflet_name','')
+                        prefs['leaflet']=lf.getvalue(); prefs['leaflet_name']=lf.name; save_user_prefs(prefs)
+                    lb=prefs.get('leaflet'); ln=prefs.get('leaflet_name','')
                     if lb:
                         st.image(lb,caption=ln,use_container_width=True)
                         render_img_share(lb,ln,f"is_{cnum}",50)
                         if st.button("✅ 기록",key=f"l2_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,2); st.success("✅"); st.rerun()
                     else:
-                        st.caption("리플렛 이미지를 업로드하세요. 한번 저장하면 유지됩니다.")
+                        st.caption("리플렛 이미지를 업로드하세요")
 
                 with t3:
                     if pcfg:
@@ -656,7 +673,8 @@ elif menu=="📱 매니저 화면":
                     else: st.info("시상 JSON 필요")
 
                 with t4:
-                    lines=["📋 메리츠 시상 현황 안내",f"📅 {datetime.now().strftime('%Y.%m.%d')} 기준","",f"👤 {co+' ' if co else ''}{cn} 팀장님",""]
+                    # 종합카톡 — 소속/코드/성명 제거 (이미 특정인에게 보내므로)
+                    lines=["📋 메리츠 시상 현황 안내",f"📅 {datetime.now().strftime('%Y.%m.%d')} 기준",""]
                     if dcfg:
                         lines.append("━━ 실적 ━━")
                         for col in dcfg:
@@ -688,14 +706,14 @@ elif menu=="📱 매니저 화면":
                         tp=sum(p['existing_prize'] for p in cumul if p['existing_prize']>0)
                         if tp>0: lines.append(f"💰 시상금: {fmt_num(tp)}원"); lines.append("")
                     lines+=["부족한 거 챙겨서 꼭 시상 많이 받으세요!","좋은 하루 되세요! 😊"]
-                    if len(lines)>7:
+                    if len(lines)>5:
                         msg="\n".join(lines)
-                        st.text_area("미리보기",msg,height=200,disabled=True,key=f"p4_{cnum}")
+                        st.text_area("미리보기",msg,height=180,disabled=True,key=f"p4_{cnum}")
                         render_kakao(msg,"📋 종합 카톡",f"k4_{cnum}",45)
                         if st.button("✅ 기록",key=f"l4_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,4); st.success("✅"); st.rerun()
 
 # =============================================================
-# 10. 모니터링 — 비밀번호 보호
+# 10. 모니터링 — 본부/지점/매니저별 활동률
 # =============================================================
 elif menu=="📊 활동 모니터링":
     st.markdown("<h2 style='font-weight:800;'>📊 활동 모니터링</h2>",unsafe_allow_html=True)
@@ -711,14 +729,102 @@ elif menu=="📊 활동 모니터링":
     mlbl={m:f"{m[:4]}년 {m[4:]}월" for m in months}
     sel_mk=st.selectbox("📅 월 선택",months,format_func=lambda x:mlbl.get(x,x),key="ms")
     ldf=get_login_summary_by_month(sel_mk); mdf=get_msg_summary_by_month(sel_mk)
-    tm=ldf['매니저코드'].nunique() if not ldf.empty else 0; tc=int(mdf['발송횟수'].sum()) if not mdf.empty else 0; tp=int(mdf['발송인원'].sum()) if not mdf.empty else 0
+    tm=ldf['매니저코드'].nunique() if not ldf.empty else 0
+    tc=int(mdf['발송횟수'].sum()) if not mdf.empty else 0
+    tp=int(mdf['발송인원'].sum()) if not mdf.empty else 0
     st.markdown(f"<div class='mon-row'><div class='mon-card red'><div class='mc-label'>로그인</div><div class='mc-num'>{tm}</div><div class='mc-sub'>명</div></div><div class='mon-card'><div class='mc-label'>발송</div><div class='mc-num'>{tc}</div><div class='mc-sub'>건</div></div><div class='mon-card'><div class='mc-label'>대상</div><div class='mc-num'>{tp}</div><div class='mc-sub'>명</div></div></div>",unsafe_allow_html=True)
-    if not ldf.empty: st.markdown("#### 🔐 로그인"); st.dataframe(ldf,use_container_width=True,hide_index=True)
-    if not mdf.empty:
+
+    # 본부/지점/매니저별 활동률 계산
+    if has_data() and not mdf.empty:
+        df_all=st.session_state['df_merged'].copy()
+        mc1_=st.session_state.get('manager_col',''); mc2_=st.session_state.get('manager_col2','')
+        mn_col_=st.session_state.get('manager_name_col','')
+        _cba_=st.session_state.get('cust_branch_col_a',''); _cbb_=st.session_state.get('cust_branch_col_b','')
+
+        # 매니저별 총 사용인 수 계산
+        mgr_total={}; mgr_branch={}; mgr_name_map={}
+        if mc1_ in df_all.columns:
+            for mc_val in df_all[mc1_].unique():
+                k=clean_key(mc_val)
+                if not k: continue
+                sub=df_all[df_all[mc1_].apply(clean_key)==k]
+                mgr_total[k]=len(sub)
+                # 지사명 가져오기
+                for _,r in sub.head(1).iterrows():
+                    br=resolve_val(r.to_dict(),_cba_,_cbb_) or ""
+                    mgr_branch[k]=br
+                    if mn_col_ in r.index:
+                        n=safe_str(r[mn_col_])
+                        if n: mgr_name_map[k]=n
+        if mc2_ and mc2_ in df_all.columns:
+            for mc_val in df_all[mc2_].unique():
+                k=clean_key(mc_val)
+                if not k or k in mgr_total: continue
+                sub=df_all[df_all[mc2_].apply(clean_key)==k]
+                mgr_total[k]=len(sub)
+                for _,r in sub.head(1).iterrows():
+                    br=resolve_val(r.to_dict(),_cba_,_cbb_) or ""
+                    mgr_branch[k]=br
+
+        # 매니저별 발송 인원
+        mgr_sent={}
+        for _,r in mdf.iterrows():
+            k=clean_key(str(r['매니저코드']))
+            if k not in mgr_sent: mgr_sent[k]=0
+            mgr_sent[k]=max(mgr_sent[k],int(r['발송인원']))
+            if k not in mgr_name_map and r['매니저명']: mgr_name_map[k]=r['매니저명']
+
+        # 지점별 집계
+        branch_stats={}
+        for k in set(list(mgr_total.keys())+list(mgr_sent.keys())):
+            br=mgr_branch.get(k,'(미지정)')
+            if br not in branch_stats: branch_stats[br]={'total':0,'sent':0,'mgrs':[]}
+            branch_stats[br]['total']+=mgr_total.get(k,0)
+            branch_stats[br]['sent']+=mgr_sent.get(k,0)
+            nm=mgr_name_map.get(k,k)
+            tot=mgr_total.get(k,0); snt=mgr_sent.get(k,0)
+            rate=round(snt/tot*100) if tot>0 else 0
+            branch_stats[br]['mgrs'].append({'code':k,'name':nm,'total':tot,'sent':snt,'rate':rate})
+
+        # ── 지점별 활동률 ──
+        st.markdown("#### 🏢 지점별 활동률")
+        sorted_branches=sorted(branch_stats.items(),key=lambda x:x[1]['sent']/max(x[1]['total'],1),reverse=True)
+        for br_name,bs in sorted_branches:
+            rate=round(bs['sent']/bs['total']*100) if bs['total']>0 else 0
+            bar_color='#00c471' if rate>=80 else ('#ff9500' if rate>=50 else 'rgb(128,0,0)')
+            st.markdown(f"""<div style='background:#fff;border:1px solid #eaedf0;border-radius:10px;padding:10px 14px;margin-bottom:6px;'>
+                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
+                    <span style='font-size:14px;font-weight:700;'>{br_name or '(미지정)'}</span>
+                    <span style='font-size:14px;font-weight:800;color:{bar_color};'>{rate}%</span>
+                </div>
+                <div class='act-bar-wrap'><div class='act-bar-fill' style='width:{min(rate,100)}%;background:{bar_color};'></div>
+                <div class='act-bar-text' style='color:{"#fff" if rate>15 else "#333"};'>{bs['sent']}/{bs['total']}명</div></div>
+                <div style='font-size:11px;color:#8b95a1;margin-top:3px;'>매니저 {len(bs["mgrs"])}명</div>
+            </div>""",unsafe_allow_html=True)
+
+        # ── 매니저별 상세 리스트 ──
+        st.markdown("#### 👤 매니저별 활동 현황")
+        mgr_list=[]
+        for br_name,bs in sorted_branches:
+            for m in bs['mgrs']:
+                mgr_list.append({**m,'branch':br_name})
+        mgr_list.sort(key=lambda x:x['rate'],reverse=True)
+        mgr_df=pd.DataFrame(mgr_list)
+        if not mgr_df.empty:
+            mgr_df=mgr_df.rename(columns={'branch':'지점','name':'매니저','total':'사용인수','sent':'활동인원','rate':'활동률%'})
+            mgr_df=mgr_df[['지점','매니저','사용인수','활동인원','활동률%']]
+            st.dataframe(mgr_df,use_container_width=True,hide_index=True)
+    elif not mdf.empty:
         st.markdown("#### 📤 발송"); mlm={1:"①인사",2:"②리플렛",3:"③시상",4:"④종합"}; mdf['메시지유형']=mdf['메시지유형'].map(mlm)
         pc=mdf.pivot_table(index=['매니저코드','매니저명'],columns='메시지유형',values='발송인원',fill_value=0).reset_index()
         st.dataframe(pc,use_container_width=True,hide_index=True)
+
+    if not ldf.empty:
+        with st.expander("🔐 로그인 상세"): st.dataframe(ldf,use_container_width=True,hide_index=True)
+
+    if not mdf.empty:
         csv=mdf.to_csv(index=False).encode('utf-8-sig'); st.download_button("📥 CSV",csv,f"s_{sel_mk}.csv","text/csv")
+
     st.markdown("---")
     c1_,c2_=st.columns(2)
     with c1_:
@@ -727,7 +833,3 @@ elif menu=="📊 활동 모니터링":
     with c2_:
         if os.path.exists(LOG_DB):
             with open(LOG_DB,'rb') as f: st.download_button("💾 DB 백업",f.read(),f"log_{datetime.now().strftime('%Y%m%d')}.db","application/octet-stream")
-        if os.path.exists(BACKUP_DIR):
-            bks=sorted([f for f in os.listdir(BACKUP_DIR) if f.endswith('.db')],reverse=True)[:3]
-            for bk in bks:
-                with open(os.path.join(BACKUP_DIR,bk),'rb') as f: st.download_button(f"📁 {bk}",f.read(),bk,"application/octet-stream",key=f"b_{bk}")
