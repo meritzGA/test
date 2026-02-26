@@ -739,81 +739,98 @@ elif menu=="📊 활동 모니터링":
         df_all=st.session_state['df_merged'].copy()
         mc1_=st.session_state.get('manager_col',''); mc2_=st.session_state.get('manager_col2','')
         mn_col_=st.session_state.get('manager_name_col','')
-        _cba_=st.session_state.get('cust_branch_col_a',''); _cbb_=st.session_state.get('cust_branch_col_b','')
 
-        # 매니저별 총 사용인 수 계산
-        mgr_total={}; mgr_branch={}; mgr_name_map={}
-        if mc1_ in df_all.columns:
-            for mc_val in df_all[mc1_].unique():
-                k=clean_key(mc_val)
-                if not k: continue
-                sub=df_all[df_all[mc1_].apply(clean_key)==k]
-                mgr_total[k]=len(sub)
-                # 지사명 가져오기
-                for _,r in sub.head(1).iterrows():
-                    br=resolve_val(r.to_dict(),_cba_,_cbb_) or ""
-                    mgr_branch[k]=br
-                    if mn_col_ in r.index:
-                        n=safe_str(r[mn_col_])
-                        if n: mgr_name_map[k]=n
-        if mc2_ and mc2_ in df_all.columns:
-            for mc_val in df_all[mc2_].unique():
-                k=clean_key(mc_val)
-                if not k or k in mgr_total: continue
-                sub=df_all[df_all[mc2_].apply(clean_key)==k]
-                mgr_total[k]=len(sub)
-                for _,r in sub.head(1).iterrows():
-                    br=resolve_val(r.to_dict(),_cba_,_cbb_) or ""
-                    mgr_branch[k]=br
+        # 본부/지점 열 (파일A/B 자동 resolve)
+        HQ_COLS = ('현재영업단조직명','지역단조직명')   # 본부
+        BR_COLS = ('현재지점조직명','지점조직명')       # 지점
+
+        # 매니저별 정보 수집
+        mgr_info = {}  # code -> {total, hq, branch, name}
+        all_mgr_cols = [mc1_] + ([mc2_] if mc2_ and mc2_ in df_all.columns else [])
+        for mc_col in all_mgr_cols:
+            if mc_col not in df_all.columns: continue
+            df_all[f'_ck_{mc_col}'] = df_all[mc_col].apply(clean_key)
+            for k in df_all[f'_ck_{mc_col}'].unique():
+                if not k or k in mgr_info: continue
+                sub = df_all[df_all[f'_ck_{mc_col}']==k]
+                row0 = sub.iloc[0].to_dict()
+                hq = resolve_val(row0, HQ_COLS[0], HQ_COLS[1]) or '(미지정)'
+                br = resolve_val(row0, BR_COLS[0], BR_COLS[1]) or '(미지정)'
+                nm = safe_str(row0.get(mn_col_,'')) if mn_col_ else k
+                mgr_info[k] = {'total':len(sub), 'hq':hq, 'branch':br, 'name':nm or k}
 
         # 매니저별 발송 인원
-        mgr_sent={}
+        mgr_sent = {}
         for _,r in mdf.iterrows():
-            k=clean_key(str(r['매니저코드']))
-            if k not in mgr_sent: mgr_sent[k]=0
-            mgr_sent[k]=max(mgr_sent[k],int(r['발송인원']))
-            if k not in mgr_name_map and r['매니저명']: mgr_name_map[k]=r['매니저명']
+            k = clean_key(str(r['매니저코드']))
+            if k not in mgr_sent: mgr_sent[k] = 0
+            mgr_sent[k] = max(mgr_sent[k], int(r['발송인원']))
+            if k not in mgr_info:
+                mgr_info[k] = {'total':0,'hq':'(미지정)','branch':'(미지정)','name':r['매니저명'] or k}
 
-        # 지점별 집계
-        branch_stats={}
-        for k in set(list(mgr_total.keys())+list(mgr_sent.keys())):
-            br=mgr_branch.get(k,'(미지정)')
-            if br not in branch_stats: branch_stats[br]={'total':0,'sent':0,'mgrs':[]}
-            branch_stats[br]['total']+=mgr_total.get(k,0)
-            branch_stats[br]['sent']+=mgr_sent.get(k,0)
-            nm=mgr_name_map.get(k,k)
-            tot=mgr_total.get(k,0); snt=mgr_sent.get(k,0)
-            rate=round(snt/tot*100) if tot>0 else 0
-            branch_stats[br]['mgrs'].append({'code':k,'name':nm,'total':tot,'sent':snt,'rate':rate})
+        # 본부별 집계
+        hq_stats = {}  # hq -> {total, sent, branches: {br -> {total, sent, mgrs:[]}}}
+        for k,info in mgr_info.items():
+            hq = info['hq']; br = info['branch']
+            snt = mgr_sent.get(k, 0); tot = info['total']
+            if hq not in hq_stats: hq_stats[hq] = {'total':0,'sent':0,'branches':{}}
+            hq_stats[hq]['total'] += tot; hq_stats[hq]['sent'] += snt
+            if br not in hq_stats[hq]['branches']: hq_stats[hq]['branches'][br] = {'total':0,'sent':0,'mgrs':[]}
+            hq_stats[hq]['branches'][br]['total'] += tot
+            hq_stats[hq]['branches'][br]['sent'] += snt
+            rate = round(snt/tot*100) if tot>0 else 0
+            hq_stats[hq]['branches'][br]['mgrs'].append({'code':k,'name':info['name'],'total':tot,'sent':snt,'rate':rate})
+
+        def bar_color(rate): return '#00c471' if rate>=80 else ('#ff9500' if rate>=50 else 'rgb(128,0,0)')
+
+        # ── 본부별 활동률 ──
+        st.markdown("#### 🏛️ 본부별 활동률")
+        sorted_hqs = sorted(hq_stats.items(), key=lambda x: x[1]['sent']/max(x[1]['total'],1), reverse=True)
+        for hq_name, hs in sorted_hqs:
+            rate = round(hs['sent']/hs['total']*100) if hs['total']>0 else 0
+            bc = bar_color(rate)
+            st.markdown(f"""<div style='background:#fff;border:1px solid #eaedf0;border-radius:12px;padding:12px 16px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,0.04);'>
+                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;'>
+                    <span style='font-size:15px;font-weight:800;color:#191f28;'>🏛️ {hq_name}</span>
+                    <span style='font-size:16px;font-weight:800;color:{bc};'>{rate}%</span>
+                </div>
+                <div class='act-bar-wrap'><div class='act-bar-fill' style='width:{min(rate,100)}%;background:{bc};'></div>
+                <div class='act-bar-text' style='color:{"#fff" if rate>15 else "#333"};'>{hs['sent']}/{hs['total']}명</div></div>
+                <div style='font-size:11px;color:#8b95a1;margin-top:3px;'>지점 {len(hs["branches"])}개 · 매니저 {sum(len(b["mgrs"]) for b in hs["branches"].values())}명</div>
+            </div>""", unsafe_allow_html=True)
 
         # ── 지점별 활동률 ──
         st.markdown("#### 🏢 지점별 활동률")
-        sorted_branches=sorted(branch_stats.items(),key=lambda x:x[1]['sent']/max(x[1]['total'],1),reverse=True)
-        for br_name,bs in sorted_branches:
-            rate=round(bs['sent']/bs['total']*100) if bs['total']>0 else 0
-            bar_color='#00c471' if rate>=80 else ('#ff9500' if rate>=50 else 'rgb(128,0,0)')
-            st.markdown(f"""<div style='background:#fff;border:1px solid #eaedf0;border-radius:10px;padding:10px 14px;margin-bottom:6px;'>
+        all_branches = []
+        for hq_name, hs in sorted_hqs:
+            for br_name, bs in hs['branches'].items():
+                all_branches.append((hq_name, br_name, bs))
+        all_branches.sort(key=lambda x: x[2]['sent']/max(x[2]['total'],1), reverse=True)
+        for hq_name, br_name, bs in all_branches:
+            rate = round(bs['sent']/bs['total']*100) if bs['total']>0 else 0
+            bc = bar_color(rate)
+            st.markdown(f"""<div style='background:#fff;border:1px solid #eaedf0;border-radius:10px;padding:10px 14px;margin-bottom:5px;'>
                 <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
-                    <span style='font-size:14px;font-weight:700;'>{br_name or '(미지정)'}</span>
-                    <span style='font-size:14px;font-weight:800;color:{bar_color};'>{rate}%</span>
+                    <div><span style='font-size:13px;font-weight:700;'>{br_name}</span><span style='font-size:10px;color:#8b95a1;margin-left:6px;'>{hq_name}</span></div>
+                    <span style='font-size:13px;font-weight:800;color:{bc};'>{rate}%</span>
                 </div>
-                <div class='act-bar-wrap'><div class='act-bar-fill' style='width:{min(rate,100)}%;background:{bar_color};'></div>
+                <div class='act-bar-wrap'><div class='act-bar-fill' style='width:{min(rate,100)}%;background:{bc};'></div>
                 <div class='act-bar-text' style='color:{"#fff" if rate>15 else "#333"};'>{bs['sent']}/{bs['total']}명</div></div>
-                <div style='font-size:11px;color:#8b95a1;margin-top:3px;'>매니저 {len(bs["mgrs"])}명</div>
-            </div>""",unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
         # ── 매니저별 상세 리스트 ──
         st.markdown("#### 👤 매니저별 활동 현황")
-        mgr_list=[]
-        for br_name,bs in sorted_branches:
-            for m in bs['mgrs']:
-                mgr_list.append({**m,'branch':br_name})
-        mgr_list.sort(key=lambda x:x['rate'],reverse=True)
-        mgr_df=pd.DataFrame(mgr_list)
+        mgr_list = []
+        for hq_name, hs in sorted_hqs:
+            for br_name, bs in hs['branches'].items():
+                for m in bs['mgrs']:
+                    mgr_list.append({**m, 'hq':hq_name, 'branch':br_name})
+        mgr_list.sort(key=lambda x: x['rate'], reverse=True)
+        mgr_df = pd.DataFrame(mgr_list)
         if not mgr_df.empty:
-            mgr_df=mgr_df.rename(columns={'branch':'지점','name':'매니저','total':'사용인수','sent':'활동인원','rate':'활동률%'})
-            mgr_df=mgr_df[['지점','매니저','사용인수','활동인원','활동률%']]
-            st.dataframe(mgr_df,use_container_width=True,hide_index=True)
+            mgr_df = mgr_df.rename(columns={'hq':'본부','branch':'지점','name':'매니저','total':'사용인수','sent':'활동인원','rate':'활동률%'})
+            mgr_df = mgr_df[['본부','지점','매니저','사용인수','활동인원','활동률%']]
+            st.dataframe(mgr_df, use_container_width=True, hide_index=True)
     elif not mdf.empty:
         st.markdown("#### 📤 발송"); mlm={1:"①인사",2:"②리플렛",3:"③시상",4:"④종합"}; mdf['메시지유형']=mdf['메시지유형'].map(mlm)
         pc=mdf.pivot_table(index=['매니저코드','매니저명'],columns='메시지유형',values='발송인원',fill_value=0).reset_index()
