@@ -1,0 +1,9 @@
+*.db
+*.pkl
+*.pkl.bak
+*.pkl.tmp
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.env
+.DS_Store
