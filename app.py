@@ -41,8 +41,8 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .metric-card .mc-sub { font-size:10px; color:var(--text3); }
 .metric-card.active { border-color:rgba(var(--mr),0.25); background:rgba(var(--mr),0.04); }
 .metric-card.active .mc-val { color:var(--red); }
-/* 리스트 버튼 — 왼쪽 정렬 */
-.stButton > button { border-radius:10px !important; font-weight:500 !important; border:1px solid var(--border) !important; text-align:left !important; justify-content:flex-start !important; padding:6px 12px !important; font-size:13px !important; transition:all .1s !important; }
+/* 리스트 버튼 — 왼쪽 정렬, 줄바꿈 */
+.stButton > button { border-radius:10px !important; font-weight:500 !important; border:1px solid var(--border) !important; text-align:left !important; justify-content:flex-start !important; padding:6px 10px !important; font-size:12px !important; transition:all .1s !important; white-space:normal !important; word-break:break-all !important; line-height:1.4 !important; }
 .stButton > button:hover { background:#f0f1f3 !important; border-color:#d5d8db !important; }
 .stButton > button[kind="primary"],[data-testid="stFormSubmitButton"]>button { background:rgb(var(--mr)) !important; color:#fff !important; border:none !important; text-align:center !important; justify-content:center !important; }
 /* 사용인 정보 카드 */
@@ -591,8 +591,26 @@ elif menu=="📱 매니저 화면":
                 cnum=safe_str(row.get('본인고객번호','')) or safe_str(row.get('_search_key',''))
                 logs=get_cust_logs(mgr_c,cnum) if cnum else []; stypes=set(l['message_type'] for l in logs)
                 bg=" ".join('🟢' if mt in stypes else '⚪' for mt in [1,2,3,4])
+                # 실적 현황 (관리자 설정 항목)
+                perf_parts=[]
+                if dcfg:
+                    rd=row.to_dict()
+                    for col in dcfg:
+                        val=rd.get(col)
+                        if val is None:
+                            for sfx in ['_파일1','_파일2']:
+                                if col+sfx in rd: val=rd[col+sfx]; break
+                        dv=safe_str(val)
+                        if not dv or dv in ('0','0.0'): continue
+                        if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
+                        if dv:
+                            # 짧은 라벨 (주차 숫자만 추출 등)
+                            short_lbl=col.replace('주차','w').replace('인보험','인').replace('자동차','차').replace('장기','장').replace('실적','')
+                            if len(short_lbl)>6: short_lbl=short_lbl[:6]
+                            perf_parts.append(f"{short_lbl}{dv}")
                 bl=f"{co} | {cn}" if co else cn
-                if st.button(f"{bl}  {bg}",key=f"c_{idx}",use_container_width=True):
+                perf_str=f"  [{' / '.join(perf_parts)}]" if perf_parts else ""
+                if st.button(f"{bl}  {bg}{perf_str}",key=f"c_{idx}",use_container_width=True):
                     cr={k:(safe_str(v) if not isinstance(v,(int,float,np.integer,np.floating)) or pd.isna(v) else v) for k,v in row.to_dict().items()}
                     st.session_state['sel_cust']={'idx':idx,'name':cn,'org':co,'code':cc_,'num':cnum,'row':cr}; st.rerun()
 
@@ -604,7 +622,7 @@ elif menu=="📱 매니저 화면":
             cn=sel['name']; cnum=sel['num']; co=sel['org']; cc_=sel.get('code',''); crow=sel['row']
             det_c=st.container(height=580)
             with det_c:
-                # 정보카드 (컴팩트)
+                # 정보 한줄 + 발송 상태
                 logs=get_cust_logs(mgr_c,cnum); stypes=set(l['message_type'] for l in logs)
                 ih=f"<div class='info-card'><div class='ic-name'>{cn}</div>"
                 meta_parts=[]
@@ -616,28 +634,7 @@ elif menu=="📱 매니저 화면":
                     ih+=f"<span class='ib {'done' if mt in stypes else 'wait'}'>{lb}{'✓' if mt in stypes else ''}</span>"
                 ih+="</div></div>"; st.markdown(ih,unsafe_allow_html=True)
 
-                # ── 카드뉴스: 관리자 설정 항목만 표시 ──
-                cards = []
-                if dcfg:
-                    for i, col in enumerate(dcfg):
-                        val=crow.get(col)
-                        if val is None:
-                            for sfx in ['_파일1','_파일2']:
-                                if col+sfx in crow: val=crow[col+sfx]; break
-                        dv=safe_str(val)
-                        if not dv or dv in ('0','0.0'): continue
-                        if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
-                        if dv:
-                            use_accent = (i % 2 == 0)  # 짝수번째 accent
-                            cards.append((col, dv, 'accent' if use_accent else ''))
-                if cards:
-                    ch="<div class='card-grid'>"
-                    for label, val, cls in cards:
-                        ch+=f"<div class='data-card {cls}'><div class='dc-label'>{label}</div><div class='dc-value'>{val}</div></div>"
-                    ch+="</div>"; st.markdown(ch, unsafe_allow_html=True)
-
-                # 메시지
-                st.markdown("<p style='font-size:14px;font-weight:700;margin:6px 0 2px;color:var(--text2);'>📤 메시지</p>",unsafe_allow_html=True)
+                # 메시지 탭만
                 t1,t2,t3,t4=st.tabs(["①인사","②리플렛","③시상","④종합"])
 
                 with t1:
