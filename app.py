@@ -145,19 +145,110 @@ def load_file_data(file_bytes, file_name):
 def fmt_num(val):
     """숫자 포맷팅: 0→빈칸, 세자리 콤마"""
     try:
-        if pd.isna(val) or str(val).strip() == "": return ""
+        if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == 'nan': return ""
         clean_val = str(val).replace(',', '')
         num = float(clean_val)
         if num == 0: return ""
         if num.is_integer(): return f"{int(num):,}"
         return f"{num:,.1f}"
     except:
-        if str(val).strip() in ["0", "0.0"]: return ""
-        return val
+        s = str(val).strip()
+        if s in ["0", "0.0", "nan", "None"]: return ""
+        return s
+
+def safe_str(val):
+    """NaN/None → 빈 문자열, 그 외 str 변환"""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    s = str(val).strip()
+    if s.lower() in ('nan', 'none', 'nat'):
+        return ""
+    return s
+
+def resolve_display_value(row, col_name, all_cols=None):
+    """행에서 컬럼 값을 가져오되, NaN이면 빈 문자열. 접미사 붙은 버전도 시도."""
+    if col_name and col_name in row.index:
+        v = safe_str(row[col_name])
+        if v: return v
+    # 접미사 붙은 버전 시도
+    if col_name:
+        for suffix in ['_파일1', '_파일2', '_A', '_B']:
+            alt = col_name + suffix
+            if alt in row.index:
+                v = safe_str(row[alt])
+                if v: return v
+    return ""
+
+def resolve_customer_name(row, primary_col):
+    """사용인 이름: 기본열 → 대체 후보 순회 → 고객번호"""
+    v = resolve_display_value(row, primary_col)
+    if v: return v
+    # 대체 후보 열 (이름 관련)
+    fallbacks = ['대리점설계사명', '현재대리점설계사조직명', '현재영업가족명', '현재대리점지사명']
+    for fb in fallbacks:
+        if fb == primary_col: continue
+        for col in row.index:
+            base = col.replace('_파일1','').replace('_파일2','')
+            if base == fb:
+                v = safe_str(row[col])
+                if v: return v
+    # 최후 수단: 고객번호
+    for col in row.index:
+        if '본인고객번호' in col:
+            v = safe_str(row[col])
+            if v: return v
+    return "(이름없음)"
+
+def resolve_customer_org(row, primary_col):
+    """사용인 소속: 기본열 → 대체 후보 순회"""
+    v = resolve_display_value(row, primary_col)
+    if v: return v
+    fallbacks = ['현재대리점설계사조직명', '현재영업가족명', '대리점지사명', '현재대리점지사명', '영업가족명']
+    for fb in fallbacks:
+        if fb == primary_col: continue
+        for col in row.index:
+            base = col.replace('_파일1','').replace('_파일2','')
+            if base == fb:
+                v = safe_str(row[col])
+                if v: return v
+    return ""
+
+def resolve_customer_number(row):
+    """본인고객번호를 찾아 반환"""
+    for col in row.index:
+        if '본인고객번호' in col:
+            v = safe_str(row[col])
+            if v: return v
+    return ""
 
 # ==========================================
 # 2. 데이터 영구 저장/불러오기
 # ==========================================
+
+def sanitize_dataframe(df):
+    """DataFrame에서 모든 NaN/None/'nan' 문자열을 정리"""
+    if df is None or df.empty: return df
+    for col in df.columns:
+        if col.startswith('_'): continue
+        # object(문자열) 컬럼: NaN → ""
+        if df[col].dtype == object:
+            df[col] = df[col].fillna("")
+            # 'nan', 'None' 문자열도 제거
+            df[col] = df[col].apply(lambda x: "" if str(x).strip().lower() in ('nan', 'none', 'nat') else x)
+        elif df[col].dtype in ['float64', 'float32']:
+            # 텍스트성 숫자열(코드/번호 등)은 문자열로 변환
+            text_kw = ['명', '코드', '번호', 'ID', 'id', '구분', '구간', '여부', '상태', '직책', '대상', '선물', '조직']
+            if any(kw in col for kw in text_kw):
+                df[col] = df[col].apply(lambda x: "" if pd.isna(x) else str(int(x)) if isinstance(x, float) and x == int(x) else str(x))
+            else:
+                df[col] = df[col].fillna(0)
+        elif df[col].dtype in ['int64', 'int32']:
+            pass  # int는 NaN 없음
+        else:
+            # 기타 타입: NaN → ""
+            if df[col].isna().any():
+                df[col] = df[col].fillna("")
+    return df
 def _reset_session_state():
     st.session_state['df_merged'] = pd.DataFrame()
     st.session_state['file_a_name'] = ""
@@ -195,6 +286,8 @@ def load_data_and_config():
             with open(DATA_FILE, 'rb') as f:
                 data = pickle.load(f)
             df = data.get('df_merged', pd.DataFrame()) if isinstance(data, dict) else pd.DataFrame()
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                df = sanitize_dataframe(df)
             st.session_state['df_merged'] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
         except:
             st.session_state['df_merged'] = pd.DataFrame()
@@ -505,7 +598,10 @@ if menu == "⚙️ 관리자 화면":
                     
                     merged['_search_key'] = merged['_mk_a'].combine_first(merged['_mk_b'])
                     
-                    st.session_state['df_merged'] = merged
+                    # ✅ NaN 정리
+                    merged = sanitize_dataframe(merged)
+                    
+                    st.session_state['df_merged'] = merged.copy()
                     st.session_state['join_col_a'] = join_a
                     st.session_state['join_col_b'] = join_b
                     
@@ -525,7 +621,8 @@ if menu == "⚙️ 관리자 화면":
         single_df = st.session_state.get('df_file_a') if fa_ok else st.session_state.get('df_file_b')
         if single_df is not None:
             if st.button("📄 단일 파일만 사용"):
-                st.session_state['df_merged'] = single_df.copy()
+                single = sanitize_dataframe(single_df.copy())
+                st.session_state['df_merged'] = single
                 save_data(); save_config()
                 st.rerun()
     
@@ -538,7 +635,8 @@ if menu == "⚙️ 관리자 화면":
         mgr_cols = [c for c in avail if '매니저코드' in c or '지원매니저코드' in c]
         for mc in mgr_cols:
             st.caption(f"  `{mc}` 고유값: {df[mc].dropna().nunique()}개")
-        st.dataframe(df[avail].head(30), use_container_width=True, height=250)
+        preview = df[avail].head(30).fillna("")
+        st.dataframe(preview, use_container_width=True, height=250)
 
     st.divider()
     
@@ -692,7 +790,10 @@ elif menu == "📱 매니저 화면":
                         mgr_name = "매니저"
                         if manager_name_col in my_df.columns:
                             names = my_df[manager_name_col].dropna()
-                            if not names.empty: mgr_name = str(names.iloc[0])
+                            names = names[names.astype(str).str.strip() != '']
+                            if not names.empty:
+                                n = safe_str(names.iloc[0])
+                                if n: mgr_name = n
                         
                         st.session_state['mgr_logged_in'] = True
                         st.session_state['mgr_code'] = code_clean
@@ -752,13 +853,9 @@ elif menu == "📱 매니저 화면":
             filtered_df = filtered_df[search_mask]
         
         for idx, row in filtered_df.iterrows():
-            c_name = str(row.get(cust_name_col, '')) if cust_name_col and cust_name_col in row.index else f"사용인_{idx}"
-            c_org = str(row.get(cust_org_col, '')) if cust_org_col and cust_org_col in row.index else ""
-            c_num = ""
-            for candidate in ['본인고객번호', '본인고객번호_파일1']:
-                if candidate in row.index:
-                    c_num = str(row[candidate]) if pd.notna(row[candidate]) else ""
-                    break
+            c_name = resolve_customer_name(row, cust_name_col)
+            c_org = resolve_customer_org(row, cust_org_col)
+            c_num = resolve_customer_number(row)
             
             # 발송 뱃지
             logs = get_customer_logs(mgr_code, c_num) if c_num else []
@@ -770,15 +867,18 @@ elif menu == "📱 매니저 화면":
                 else:
                     badges += f"<span class='badge-unsent'>{mt}</span>"
             
-            btn_label = f"{c_name} | {c_org}" if c_org and c_org != 'nan' else c_name
+            btn_label = f"{c_name} | {c_org}" if c_org else c_name
             
             # 뱃지 표시
             st.markdown(f"<div style='font-size:11px;margin-bottom:-8px;margin-top:4px;'>{badges}</div>", unsafe_allow_html=True)
             
             if st.button(btn_label, key=f"cust_{idx}", use_container_width=True):
+                # NaN 안전 처리된 dict 저장
+                clean_row = {k: (safe_str(v) if not isinstance(v, (int, float, np.integer, np.floating)) or pd.isna(v) else v) 
+                             for k, v in row.to_dict().items()}
                 st.session_state['selected_cust'] = {
                     'idx': idx, 'name': c_name, 'org': c_org, 'num': c_num,
-                    'row': row.to_dict()
+                    'row': clean_row
                 }
                 st.rerun()
     
@@ -793,7 +893,8 @@ elif menu == "📱 매니저 화면":
             cust_row = sel['row']
             
             st.subheader(f"📋 {cust_name}")
-            st.caption(f"소속: {cust_org} | 고객번호: {cust_num}")
+            org_text = f"소속: {cust_org} | " if cust_org else ""
+            st.caption(f"{org_text}고객번호: {cust_num}")
             
             # 당월 발송 상태
             logs = get_customer_logs(mgr_code, cust_num)
@@ -810,10 +911,28 @@ elif menu == "📱 매니저 화면":
             with st.expander("📈 실적 상세", expanded=True):
                 perf_items = []
                 for col in display_cols_cfg:
+                    # 직접 매칭 또는 접미사 매칭
+                    val = None
+                    actual_col = col
                     if col in cust_row:
                         val = cust_row[col]
-                        if pd.notna(val) and str(val).strip() and str(val) != 'nan':
-                            perf_items.append((col, fmt_num(val) if isinstance(val, (int, float, np.integer, np.floating)) else str(val)))
+                    else:
+                        for suffix in ['_파일1', '_파일2']:
+                            alt = col + suffix
+                            if alt in cust_row:
+                                val = cust_row[alt]
+                                actual_col = alt
+                                break
+                    
+                    if val is None:
+                        continue
+                    display_val = safe_str(val)
+                    if not display_val or display_val in ('0', '0.0'):
+                        continue
+                    if isinstance(val, (int, float, np.integer, np.floating)) and not pd.isna(val):
+                        display_val = fmt_num(val)
+                    if display_val:
+                        perf_items.append((col, display_val))  # 표시명은 원래 col 이름
                 if perf_items:
                     perf_df = pd.DataFrame(perf_items, columns=['항목', '값'])
                     st.dataframe(perf_df, use_container_width=True, hide_index=True)
@@ -860,8 +979,13 @@ elif menu == "📱 매니저 화면":
                     base = k.replace('_파일1', '').replace('_파일2', '')
                     if base in prize_keys or any(pk in k for pk in prize_keys):
                         val = cust_row[k]
-                        if pd.notna(val) and str(val).strip() and str(val) not in ['nan', '0', '0.0']:
-                            prize_info[k] = fmt_num(val) if isinstance(val, (int, float, np.integer, np.floating)) else str(val)
+                        display_val = safe_str(val)
+                        if not display_val or display_val in ('0', '0.0'):
+                            continue
+                        if isinstance(val, (int, float, np.integer, np.floating)) and not pd.isna(val):
+                            display_val = fmt_num(val)
+                        if display_val:
+                            prize_info[k] = display_val
                 
                 # 외부 JSON 시상 데이터
                 json_prize = st.session_state.get('prize_json_data', {})
@@ -875,13 +999,20 @@ elif menu == "📱 매니저 화면":
                     elif isinstance(json_prize, dict):
                         json_cust_prize = json_prize.get(str(cust_num), {})
                 
-                combined_prize = {**prize_info, **{k: (fmt_num(v) if isinstance(v, (int, float)) else str(v)) for k, v in json_cust_prize.items()}}
+                combined_prize = {**prize_info}
+                for k, v in json_cust_prize.items():
+                    display_val = safe_str(v)
+                    if display_val and display_val not in ('0', '0.0'):
+                        if isinstance(v, (int, float)):
+                            display_val = fmt_num(v)
+                        combined_prize[k] = display_val
                 
                 if combined_prize:
-                    st.dataframe(pd.DataFrame([combined_prize]), use_container_width=True)
+                    st.dataframe(pd.DataFrame([combined_prize]).fillna(""), use_container_width=True)
                     lines = [f"📊 {cust_name}님 시상 현황 안내", "─" * 20]
                     for k, v in combined_prize.items():
-                        lines.append(f"▪ {k}: {v}")
+                        if v:  # 빈 값 스킵
+                            lines.append(f"▪ {k}: {v}")
                     msg = "\n".join(lines)
                     st.text_area("미리보기", msg, height=180, disabled=True, key=f"prev3_{cust_num}")
                     render_kakao_btn(msg, "📋 시상안내 카톡 보내기", f"k3_{cust_num}")
@@ -896,17 +1027,19 @@ elif menu == "📱 매니저 화면":
             with tab4:
                 lines = [f"📊 {cust_name}님 실적 & 시상 현황", "─" * 20]
                 
-                # 실적
+                # 실적 (perf_items already nan-filtered)
                 if perf_items:
                     lines.append("\n📈 실적 현황")
                     for k, v in perf_items:
-                        lines.append(f"  ▪ {k}: {v}")
+                        if v:  # 빈 값 스킵
+                            lines.append(f"  ▪ {k}: {v}")
                 
-                # 시상
+                # 시상 (combined_prize already nan-filtered)
                 if combined_prize:
                     lines.append("\n🏆 시상 현황")
                     for k, v in combined_prize.items():
-                        lines.append(f"  ▪ {k}: {v}")
+                        if v:  # 빈 값 스킵
+                            lines.append(f"  ▪ {k}: {v}")
                 
                 if perf_items or combined_prize:
                     msg = "\n".join(lines)
