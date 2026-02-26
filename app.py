@@ -31,7 +31,8 @@ html, body, [class*="css"] {
 .block-container { padding: 1rem 1.2rem !important; max-width: 100% !important; background: var(--bg); }
 section[data-testid="stSidebar"] { background: linear-gradient(180deg, rgb(128,0,0) 0%, rgb(90,0,0) 100%); }
 section[data-testid="stSidebar"] * { color: #fff !important; }
-section[data-testid="stSidebar"] label { color: rgba(255,255,255,0.7) !important; }
+section[data-testid="stSidebar"] label { color: rgba(255,255,255,0.85) !important; }
+section[data-testid="stSidebar"] .stRadio label span { color: #fff !important; font-weight: 600; }
 .hero-card {
     background: linear-gradient(135deg, rgb(128,0,0) 0%, rgb(100,0,0) 40%, rgb(70,0,0) 100%);
     padding: 28px 32px 24px; border-radius: var(--radius); margin-bottom: 20px;
@@ -42,7 +43,7 @@ section[data-testid="stSidebar"] label { color: rgba(255,255,255,0.7) !important
     width: 180px; height: 180px; background: rgba(255,255,255,0.04); border-radius: 50%;
 }
 .hero-name { color: #fff; font-size: 28px; font-weight: 800; margin: 0; letter-spacing: -0.5px; }
-.hero-sub { color: rgba(255,200,200,0.9); font-size: 15px; font-weight: 500; margin: 6px 0 0; }
+.hero-sub { color: #ffffff; font-size: 15px; font-weight: 500; margin: 6px 0 0; opacity: 0.9; }
 .metric-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 .metric-card {
     flex: 1; min-width: 80px; background: var(--card); border: 1px solid var(--border);
@@ -730,22 +731,62 @@ elif menu == "📱 매니저 화면":
             with t3:
                 if pcfg:
                     prs = calc_prize(crow, pcfg)
-                    lines = [f"📊 {cn}님 시상 현황","─"*20]
-                    for pr in prs:
-                        lines.append(f"\n▪ {pr['name']}")
-                        lines.append(f"  실적: {fmt_num(pr['perf'])}")
-                        if pr['achieved_tier']: lines.append(f"  ✅ 달성: {fmt_num(pr['achieved_tier'])} ({fmt_num(pr['achieved_prize'])}%)")
-                        if pr['existing_prize']>0: lines.append(f"  💰 확정: {fmt_num(pr['existing_prize'])}원")
-                        if pr['next_tier']: lines.append(f"  🎯 다음: {fmt_num(pr['next_tier'])} (부족: {fmt_num(pr['shortfall'])})")
+                    # 레퍼런스 스타일 메시지 포맷
+                    lines = ["📋 메리츠 시상 현황 안내"]
+                    lines.append(f"📅 {datetime.now().strftime('%Y.%m.%d')} 기준")
+                    lines.append("")
+                    lines.append(f"👤 {co+' ' if co else ''}{cn} 팀장님")
+                    lines.append("")
+                    
+                    # 구간 시책 (weekly)
+                    weekly = [p for p in prs if p.get('category')=='weekly']
+                    cumul = [p for p in prs if p.get('category')=='cumulative']
+                    
+                    if weekly:
+                        lines.append("━━ 시책 현황 ━━")
+                        for pr in weekly:
+                            lines.append(f"  {pr['name']}: {fmt_num(pr['perf'])}")
+                            if pr['achieved_tier']:
+                                lines.append(f"  ✅ {fmt_num(pr['achieved_tier'])} 구간 달성 ({fmt_num(pr['achieved_prize'])}%)")
+                            if pr['next_tier']:
+                                lines.append(f"  🎯 다음 {fmt_num(pr['next_tier'])} 구간까지")
+                                lines.append(f"  🔴 부족: {fmt_num(pr['shortfall'])}")
+                            lines.append("")
+                    
+                    if cumul:
+                        lines.append("━━ 누계 시상 ━━")
+                        for pr in cumul:
+                            if pr['existing_prize'] > 0:
+                                lines.append(f"  {pr['name']}: {fmt_num(pr['existing_prize'])}원")
+                            elif pr['perf'] > 0:
+                                lines.append(f"  {pr['name']}: 실적 {fmt_num(pr['perf'])}")
+                        lines.append("")
+                    
+                    # 총 시상금
+                    total_prize = sum(p['existing_prize'] for p in cumul if p['existing_prize']>0)
+                    total_prize += sum(p['achieved_prize'] for p in weekly if p['achieved_tier'])
+                    if total_prize > 0:
+                        lines.append(f"💰 예상 시상금: {fmt_num(total_prize)}원")
+                        lines.append("")
+                    
+                    lines.append("부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!")
+                    lines.append("좋은 하루 되세요! 😊")
+                    
                     msg = "\n".join(lines)
-                    st.text_area("미리보기", msg, height=200, disabled=True, key=f"p3_{cnum}")
-                    render_kakao(msg, "📋 시상 카톡", f"k3_{cnum}")
+                    st.text_area("미리보기", msg, height=250, disabled=True, key=f"p3_{cnum}")
+                    render_kakao(msg, "📋 시상안내 카톡", f"k3_{cnum}")
                     if st.button("✅ 기록", key=f"l3_{cnum}", type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,3); st.success("✅"); st.rerun()
                 else: st.info("관리자에서 시상 JSON 업로드 필요")
             with t4:
-                lines = [f"📊 {cn}님 실적 & 시상","─"*20]
+                lines = ["📋 메리츠 시상 현황 안내"]
+                lines.append(f"📅 {datetime.now().strftime('%Y.%m.%d')} 기준")
+                lines.append("")
+                lines.append(f"👤 {co+' ' if co else ''}{cn} 팀장님")
+                lines.append("")
+                
+                # 실적 섹션
                 if dcfg:
-                    lines.append("\n📈 실적")
+                    lines.append("━━ 실적 현황 ━━")
                     for col in dcfg:
                         val = crow.get(col)
                         if val is None:
@@ -754,17 +795,50 @@ elif menu == "📱 매니저 화면":
                         dv = safe_str(val)
                         if dv and dv not in ('0','0.0'):
                             if isinstance(val,(int,float)) and not pd.isna(val): dv = fmt_num(val)
-                            if dv: lines.append(f"  ▪ {col}: {dv}")
+                            if dv:
+                                if '부족' in col:
+                                    lines.append(f"  🔴 {col}: {dv}")
+                                elif '목표' in col or '다음' in col:
+                                    lines.append(f"  🎯 {col}: {dv}")
+                                else:
+                                    lines.append(f"  {col}: {dv}")
+                    lines.append("")
+                
+                # 시상 섹션
                 if pcfg:
                     prs = calc_prize(crow, pcfg)
-                    lines.append("\n🏆 시상")
-                    for pr in prs:
-                        s = "✅" if pr['achieved_tier'] else "⬜"
-                        lines.append(f"  {s} {pr['name']}: {fmt_num(pr['perf'])}")
-                        if pr['shortfall']>0: lines.append(f"     부족: {fmt_num(pr['shortfall'])}")
-                if len(lines)>2:
+                    weekly = [p for p in prs if p.get('category')=='weekly']
+                    cumul = [p for p in prs if p.get('category')=='cumulative']
+                    
+                    if weekly:
+                        lines.append("━━ 시책 현황 ━━")
+                        for pr in weekly:
+                            s = "✅" if pr['achieved_tier'] else "⬜"
+                            lines.append(f"  {s} {pr['name']}: {fmt_num(pr['perf'])}")
+                            if pr['shortfall']>0:
+                                lines.append(f"     🔴 다음 {fmt_num(pr['next_tier'])} 구간까지 {fmt_num(pr['shortfall'])}")
+                        lines.append("")
+                    
+                    if cumul:
+                        lines.append("━━ 누계 시상 ━━")
+                        for pr in cumul:
+                            if pr['existing_prize']>0:
+                                lines.append(f"  {pr['name']}: {fmt_num(pr['existing_prize'])}원")
+                            elif pr['perf']>0:
+                                lines.append(f"  {pr['name']}: 실적 {fmt_num(pr['perf'])}")
+                        lines.append("")
+                    
+                    total_prize = sum(p['existing_prize'] for p in cumul if p['existing_prize']>0)
+                    if total_prize > 0:
+                        lines.append(f"💰 예상 시상금: {fmt_num(total_prize)}원")
+                        lines.append("")
+                
+                lines.append("부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!")
+                lines.append("좋은 하루 되세요! 😊")
+                
+                if len(lines)>5:
                     msg = "\n".join(lines)
-                    st.text_area("미리보기", msg, height=280, disabled=True, key=f"p4_{cnum}")
+                    st.text_area("미리보기", msg, height=320, disabled=True, key=f"p4_{cnum}")
                     render_kakao(msg, "📋 시상+실적 카톡", f"k4_{cnum}")
                     if st.button("✅ 기록", key=f"l4_{cnum}", type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,4); st.success("✅"); st.rerun()
                 else: st.info("데이터 없음")
