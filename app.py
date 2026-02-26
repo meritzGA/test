@@ -49,12 +49,21 @@ section[data-testid="stSidebar"] label { color: rgba(255,255,255,0.85) !importan
 .metric-card .mc-sub { font-size:11px; color:var(--text3); }
 .metric-card.active { border-color:rgba(var(--mr),0.3); background:var(--red-light); }
 .metric-card.active .mc-val { color:var(--red); }
-/* 사용인 리스트 버튼 - 뱃지 내장 */
+/* 사용인 리스트 - 왼쪽 정렬 + 동그라미 뱃지 */
 .cust-btn-wrap { position: relative; margin-bottom: 2px; }
-.cust-badges { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; z-index: 1; pointer-events: none; }
-.cb { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:5px; font-size:10px; font-weight:700; }
-.cb.done { background:var(--green); color:#fff; }
-.cb.wait { background:#eee; color:#ccc; }
+/* 왼쪽 리스트 독립 스크롤 */
+.scroll-list { max-height: calc(100vh - 340px); overflow-y: auto; padding-right: 4px; }
+.scroll-list::-webkit-scrollbar { width: 4px; }
+.scroll-list::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
+.scroll-detail { max-height: calc(100vh - 280px); overflow-y: auto; padding-right: 4px; }
+.scroll-detail::-webkit-scrollbar { width: 4px; }
+.scroll-detail::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
+/* 사용인 정보 카드 */
+.info-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; margin-bottom:12px; }
+.info-card .ic-name { font-size:20px; font-weight:800; color:var(--text1); margin-bottom:6px; }
+.info-row { display:flex; justify-content:space-between; padding:3px 0; font-size:13px; }
+.info-row .ir-label { color:var(--text3); font-weight:500; }
+.info-row .ir-value { color:var(--text1); font-weight:600; }
 /* 시상 카드 */
 .prize-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:8px; }
 .prize-card.achieved { border-left:4px solid var(--green); }
@@ -99,7 +108,7 @@ section[data-testid="stSidebar"] label { color: rgba(255,255,255,0.85) !importan
 .mon-card .mc-sub { font-size:12px; color:var(--text3); }
 .mon-card.red .mc-num { color:var(--red); }
 /* 오버라이드 */
-.stButton > button { border-radius:12px !important; font-weight:600 !important; border:1px solid var(--border) !important; }
+.stButton > button { border-radius:12px !important; font-weight:600 !important; border:1px solid var(--border) !important; text-align:left !important; justify-content:flex-start !important; }
 .stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button { background:rgb(var(--mr)) !important; color:#fff !important; border:none !important; }
 iframe { width:100% !important; }
 @media (max-width:768px) {
@@ -398,20 +407,21 @@ def prize_card_html(p):
     h += "<div class='pc-progress'>"
     h += f"<div class='pc-row'><span class='label'>실적</span><span class='value'>{fmt_num(p['perf'])}</span></div>"
     if p['achieved_tier']:
-        h += f"<div class='pc-row'><span class='label'>달성</span><span class='value green'>{fmt_num(p['achieved_tier'])} ({fmt_num(p['achieved_prize'])}%)</span></div>"
+        h += f"<div class='pc-row'><span class='label'>달성 구간</span><span class='value green'>{fmt_num(p['achieved_tier'])}</span></div>"
     if p['existing_prize']>0:
-        h += f"<div class='pc-row'><span class='label'>확정</span><span class='value green'>{fmt_num(p['existing_prize'])}원</span></div>"
+        h += f"<div class='pc-row'><span class='label'>확정 시상금</span><span class='value green'>{fmt_num(p['existing_prize'])}원</span></div>"
     if p['next_tier']:
-        h += f"<div class='pc-row'><span class='label'>다음</span><span class='value orange'>{fmt_num(p['next_tier'])}</span></div>"
-        h += f"<div class='pc-row'><span class='label'>부족</span><span class='value red'>{fmt_num(p['shortfall'])}</span></div>"
+        h += f"<div class='pc-row'><span class='label'>다음 목표</span><span class='value orange'>{fmt_num(p['next_tier'])}</span></div>"
+        h += f"<div class='pc-row'><span class='label'>부족 금액</span><span class='value red'>{fmt_num(p['shortfall'])}</span></div>"
     elif p['achieved_tier']:
         h += "<div class='pc-row'><span class='label'>🎉</span><span class='value green'>최고구간!</span></div>"
     h += "</div>"
+    # 구간 테이블: 구간만 표시 (시상률 제거)
     if p['sorted_tiers']:
-        h += "<table class='tier-table'><tr><th>구간</th><th>시상률</th></tr>"
+        h += "<table class='tier-table'><tr><th>구간</th></tr>"
         for th, pr in p['sorted_tiers']:
             cls = "hit" if p['achieved_tier'] and th==p['achieved_tier'] else ("next" if p['next_tier'] and th==p['next_tier'] else "")
-            h += f"<tr class='{cls}'><td>{fmt_num(th)}이상</td><td>{fmt_num(pr)}%</td></tr>"
+            h += f"<tr class='{cls}'><td>{fmt_num(th)}이상</td></tr>"
         h += "</table>"
     h += "</div>"
     return h
@@ -637,20 +647,22 @@ elif menu == "📱 매니저 화면":
         srch = st.text_input("🔍", placeholder="이름/소속 검색", key="cs", label_visibility="collapsed")
         fdf = my.copy()
         if srch: fdf = fdf[fdf.apply(lambda r: srch.lower() in str(r.values).lower(), axis=1)]
-        for idx, row in fdf.iterrows():
-            co = resolve_val(row, _cba, _cbb) or resolve_val(row, '현재대리점지사명','대리점지사명')
-            cn = resolve_val(row, _cna, _cnb) or resolve_val(row, '현재대리점설계사조직명','대리점설계사명') or safe_str(row.get('본인고객번호',''))
-            cc = resolve_val(row, _cca, _ccb) or resolve_val(row, '현재대리점설계사조직코드','대리점설계사조직코드')
-            cnum = safe_str(row.get('본인고객번호','')) or safe_str(row.get('_search_key',''))
-            logs = get_cust_logs(mgr_c, cnum) if cnum else []
-            stypes = set(l['message_type'] for l in logs)
-            # 뱃지를 버튼 라벨에 내장
-            badges = "".join(f"{'✅' if mt in stypes else '⬜'}" for mt in [1,2,3,4])
-            bl = f"{co} | {cn}" if co else cn
-            bl_with_badge = f"{bl}  [{badges}]"
-            if st.button(bl_with_badge, key=f"c_{idx}", use_container_width=True):
-                cr = {k: (safe_str(v) if not isinstance(v,(int,float,np.integer,np.floating)) or pd.isna(v) else v) for k,v in row.to_dict().items()}
-                st.session_state['sel_cust'] = {'idx':idx,'name':cn,'org':co,'code':cc,'num':cnum,'row':cr}; st.rerun()
+        # 독립 스크롤 컨테이너
+        list_cont = st.container(height=550)
+        with list_cont:
+            for idx, row in fdf.iterrows():
+                co = resolve_val(row, _cba, _cbb) or resolve_val(row, '현재대리점지사명','대리점지사명')
+                cn = resolve_val(row, _cna, _cnb) or resolve_val(row, '현재대리점설계사조직명','대리점설계사명') or safe_str(row.get('본인고객번호',''))
+                cc = resolve_val(row, _cca, _ccb) or resolve_val(row, '현재대리점설계사조직코드','대리점설계사조직코드')
+                cnum = safe_str(row.get('본인고객번호','')) or safe_str(row.get('_search_key',''))
+                logs = get_cust_logs(mgr_c, cnum) if cnum else []
+                stypes = set(l['message_type'] for l in logs)
+                # 동그라미 체크 뱃지
+                badges = "  " + "".join(f"{'🟢' if mt in stypes else '⚪'}" for mt in [1,2,3,4])
+                bl = f"{co} | {cn}" if co else cn
+                if st.button(f"{bl}{badges}", key=f"c_{idx}", use_container_width=True):
+                    cr = {k: (safe_str(v) if not isinstance(v,(int,float,np.integer,np.floating)) or pd.isna(v) else v) for k,v in row.to_dict().items()}
+                    st.session_state['sel_cust'] = {'idx':idx,'name':cn,'org':co,'code':cc,'num':cnum,'row':cr}; st.rerun()
 
     with cd:
         sel = st.session_state.get('sel_cust')
@@ -658,72 +670,123 @@ elif menu == "📱 매니저 화면":
             st.markdown("<div style='text-align:center;padding:60px 20px;color:#8b95a1;'><p style='font-size:48px;margin-bottom:12px;'>👈</p><p>사용인을 선택하세요</p></div>", unsafe_allow_html=True)
         else:
             cn = sel['name']; cnum = sel['num']; co = sel['org']; cc = sel.get('code',''); crow = sel['row']
-            hp = []
-            if co: hp.append(co)
-            if cc: hp.append(f"코드: {cc}")
-            st.markdown(f"<div style='margin-bottom:8px;'><span style='font-size:20px;font-weight:800;'>{cn}</span><br><span style='font-size:13px;color:#6b7684;'>{' · '.join(hp)}</span></div>", unsafe_allow_html=True)
+            # 독립 스크롤 컨테이너
+            detail_cont = st.container(height=600)
+            with detail_cont:
+                # ── 사용인 정보 카드 (상단 고정) ──
+                info_h = "<div class='info-card'>"
+                info_h += f"<div class='ic-name'>{cn}</div>"
+                if co: info_h += f"<div class='info-row'><span class='ir-label'>지사명</span><span class='ir-value'>{co}</span></div>"
+                if cc: info_h += f"<div class='info-row'><span class='ir-label'>설계사코드</span><span class='ir-value'>{cc}</span></div>"
+                # 발송 상태 뱃지
+                logs = get_cust_logs(mgr_c, cnum); stypes = set(l['message_type'] for l in logs)
+                info_h += "<div style='display:flex;gap:5px;margin-top:8px;'>"
+                for mt, lb in ml.items():
+                    if mt in stypes: info_h += f"<span style='background:#00c471;color:#fff;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;'>{lb} ✓</span>"
+                    else: info_h += f"<span style='background:#f2f4f6;color:#ccc;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;'>{lb}</span>"
+                info_h += "</div></div>"
+                st.markdown(info_h, unsafe_allow_html=True)
 
-            logs = get_cust_logs(mgr_c, cnum); stypes = set(l['message_type'] for l in logs)
-            sh = "<div style='display:flex;gap:6px;margin-bottom:12px;'>"
-            for mt, lb in ml.items():
-                if mt in stypes: sh += f"<span style='background:#00c471;color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;'>{lb} ✅</span>"
-                else: sh += f"<span style='background:#f2f4f6;color:#bbb;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;'>{lb}</span>"
-            sh += "</div>"; st.markdown(sh, unsafe_allow_html=True)
+                # ── 컴팩트 실적 (인라인 태그) ──
+                if dcfg:
+                    perf_tags = []
+                    for col in dcfg:
+                        val = crow.get(col)
+                        if val is None:
+                            for sfx in ['_파일1','_파일2']:
+                                if col+sfx in crow: val = crow[col+sfx]; break
+                        dv = safe_str(val)
+                        if not dv or dv in ('0','0.0'): continue
+                        if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv = fmt_num(val)
+                        if dv: perf_tags.append((col, dv))
+                    if perf_tags:
+                        ph = "<div class='perf-inline'>"
+                        for k, v in perf_tags:
+                            ph += f"<span class='perf-tag'><span class='pk'>{k}</span><span class='pv'>{v}</span></span>"
+                        ph += "</div>"
+                        st.markdown(ph, unsafe_allow_html=True)
 
-            # 시상
-            if pcfg:
-                st.markdown("<p style='font-size:15px;font-weight:700;margin:4px 0;'>🏆 시상 현황</p>", unsafe_allow_html=True)
-                prs = calc_prize(crow, pcfg)
-                ph = "<div>"
-                for pr in prs: ph += prize_card_html(pr)
-                ph += "</div>"; st.markdown(ph, unsafe_allow_html=True)
+                # 시상
+                if pcfg:
+                    st.markdown("<p style='font-size:15px;font-weight:700;margin:4px 0;'>🏆 시상 현황</p>", unsafe_allow_html=True)
+                    prs = calc_prize(crow, pcfg)
+                    ph = "<div>"
+                    for pr in prs: ph += prize_card_html(pr)
+                    ph += "</div>"; st.markdown(ph, unsafe_allow_html=True)
 
-            # ── 컴팩트 실적 (인라인 태그) ──
-            if dcfg:
-                perf_tags = []
-                for col in dcfg:
-                    val = crow.get(col)
-                    if val is None:
-                        for sfx in ['_파일1','_파일2']:
-                            if col+sfx in crow: val = crow[col+sfx]; break
-                    dv = safe_str(val)
-                    if not dv or dv in ('0','0.0'): continue
-                    if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv = fmt_num(val)
-                    if dv: perf_tags.append((col, dv))
-                if perf_tags:
-                    ph = "<div class='perf-inline'>"
-                    for k, v in perf_tags:
-                        ph += f"<span class='perf-tag'><span class='pk'>{k}</span><span class='pv'>{v}</span></span>"
-                    ph += "</div>"
-                    st.markdown(ph, unsafe_allow_html=True)
+                # ── 메시지 발송 ──
+                st.markdown("---")
+                st.markdown("<p style='font-size:15px;font-weight:700;'>📤 메시지 발송</p>", unsafe_allow_html=True)
+                t1, t2, t3, t4 = st.tabs(["①인사말","②리플렛","③시상","④시상+실적"])
 
-            # ── 메시지 발송 ──
-            st.markdown("---")
-            st.markdown("<p style='font-size:15px;font-weight:700;'>📤 메시지 발송</p>", unsafe_allow_html=True)
-            t1, t2, t3, t4 = st.tabs(["①인사말","②리플렛","③시상","④시상+실적"])
+                with t1:
+                    gr_key = f"g_{cnum}"
+                    gr = st.text_area("인사말 입력", placeholder="안녕하세요! 이번 달도 화이팅입니다!", key=gr_key, height=80)
+                    if st.button("💬 메시지 생성", key=f"gb_{cnum}", use_container_width=True):
+                        if gr:
+                            st.session_state[f'msg1_{cnum}'] = f"안녕하세요, {cn}님!\n{mgr_n} 매니저입니다.\n\n{gr}"
+                        else:
+                            st.warning("인사말을 입력하세요.")
+                    saved_msg = st.session_state.get(f'msg1_{cnum}','')
+                    if saved_msg:
+                        st.text_area("미리보기", saved_msg, height=100, disabled=True, key=f"p1_{cnum}")
+                        render_kakao(saved_msg, "📋 인사말 카톡", f"k1_{cnum}")
+                        if st.button("✅ 발송 기록", key=f"l1_{cnum}", type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,1); st.success("✅"); st.rerun()
 
-            with t1:
-                # 인사말 저장 버튼 방식
-                gr_key = f"g_{cnum}"
-                gr = st.text_area("인사말 입력", placeholder="안녕하세요! 이번 달도 화이팅입니다!", key=gr_key, height=80)
-                if st.button("💬 메시지 생성", key=f"gb_{cnum}", use_container_width=True):
-                    if gr:
-                        st.session_state[f'msg1_{cnum}'] = f"안녕하세요, {cn}님!\n{mgr_n} 매니저입니다.\n\n{gr}"
-                    else:
-                        st.warning("인사말을 입력하세요.")
-                saved_msg = st.session_state.get(f'msg1_{cnum}','')
-                if saved_msg:
-                    st.text_area("미리보기", saved_msg, height=100, disabled=True, key=f"p1_{cnum}")
-                    render_kakao(saved_msg, "📋 인사말 카톡", f"k1_{cnum}")
-                    if st.button("✅ 발송 기록", key=f"l1_{cnum}", type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,1); st.success("✅"); st.rerun()
-
-            with t2:
-                lf = st.file_uploader("리플렛", type=["png","jpg","jpeg","pdf"], key=f"lf_{cnum}")
-                if lf:
-                    msg = f"📎 {mgr_n} 매니저 → {cn}님 리플렛\n첨부: {lf.name}"
-                    st.text_area("미리보기", msg, height=80, disabled=True, key=f"p2_{cnum}")
-                    render_kakao(msg, "📋 리플렛 카톡", f"k2_{cnum}")
-                    if st.button("✅ 발송 기록", key=f"l2_{cnum}", type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,2); st.success("✅"); st.rerun()
+                with t2:
+                    lf = st.file_uploader("리플렛 이미지", type=["png","jpg","jpeg"], key=f"lf_{cnum}")
+                    if lf:
+                        # 이미지 미리보기
+                        st.image(lf, caption=lf.name, use_container_width=True)
+                        # 이미지 파일을 Web Share API로 공유 (모바일: 카톡 직접 전송)
+                        import base64
+                        img_b64 = base64.b64encode(lf.getvalue()).decode('ascii')
+                        mime = f"image/{lf.name.split('.')[-1].lower()}"
+                        if mime == "image/jpg": mime = "image/jpeg"
+                        share_html = f"""<style>
+                        .kb{{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#FEE500,#F5D600);
+                        color:#3C1E1E;border:none;padding:12px 24px;border-radius:12px;font-size:15px;font-weight:700;
+                        cursor:pointer;width:100%;justify-content:center;font-family:'Pretendard',sans-serif;}}
+                        .kb:active{{transform:scale(0.97);}}.kb.ok{{background:linear-gradient(135deg,#00c471,#00a85e);color:#fff;}}
+                        .ks{{font-size:12px;color:#888;margin-top:4px;text-align:center;}}</style>
+                        <button class="kb" id="lf_btn_{cnum}" onclick="shareImg_{cnum}()">
+                        <svg viewBox="0 0 24 24" fill="#3C1E1E" width="20" height="20"><path d="M12 3C6.48 3 2 6.58 2 10.9c0 2.78 1.8 5.22 4.51 6.6-.2.73-.72 2.64-.82 3.05-.13.5.18.49.38.36.16-.11 2.5-1.7 3.51-2.39.79.11 1.6.17 2.42.17 5.52 0 10-3.58 10-7.9S17.52 3 12 3z"/></svg>
+                        📷 리플렛 이미지 카톡 전송</button>
+                        <div class="ks" id="lf_st_{cnum}"></div>
+                        <script>
+                        async function shareImg_{cnum}() {{
+                            var b64 = "{img_b64}";
+                            var bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                            var blob = new Blob([bytes], {{type: "{mime}"}});
+                            var file = new File([blob], "{lf.name}", {{type: "{mime}"}});
+                            var btn = document.getElementById("lf_btn_{cnum}");
+                            // 모바일: 이미지 파일 직접 공유
+                            if (navigator.canShare && navigator.canShare({{files: [file]}})) {{
+                                try {{
+                                    await navigator.share({{files: [file], title: "{cn}님 리플렛", text: "{mgr_n} 매니저 리플렛"}});
+                                    btn.classList.add('ok'); btn.innerHTML='✅ 전송 완료!';
+                                    document.getElementById("lf_st_{cnum}").innerHTML='<a href="kakaotalk://launch" style="color:#3B82F6;">카카오톡 열기</a>';
+                                    setTimeout(()=>{{ btn.classList.remove('ok'); btn.innerHTML='📷 리플렛 이미지 카톡 전송'; }}, 3000);
+                                }} catch(e) {{ fallbackDl_{cnum}(); }}
+                            }} else {{ fallbackDl_{cnum}(); }}
+                        }}
+                        function fallbackDl_{cnum}() {{
+                            // PC: 이미지 다운로드 후 카톡에 붙여넣기 안내
+                            var b64 = "{img_b64}";
+                            var bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                            var blob = new Blob([bytes], {{type: "{mime}"}});
+                            var url = URL.createObjectURL(blob);
+                            var a = document.createElement('a'); a.href = url; a.download = "{lf.name}";
+                            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                            var btn = document.getElementById("lf_btn_{cnum}");
+                            btn.classList.add('ok'); btn.innerHTML='✅ 다운로드 완료!';
+                            document.getElementById("lf_st_{cnum}").innerHTML='💡 다운로드한 이미지를 카톡에 전송하세요';
+                            setTimeout(()=>{{ btn.classList.remove('ok'); btn.innerHTML='📷 리플렛 이미지 카톡 전송'; }}, 4000);
+                        }}
+                        </script>"""
+                        components.html(share_html, height=70)
+                        if st.button("✅ 발송 기록", key=f"l2_{cnum}", type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,2); st.success("✅"); st.rerun()
 
             with t3:
                 if pcfg:
@@ -736,7 +799,7 @@ elif menu == "📱 매니저 화면":
                         lines.append("━━ 시책 현황 ━━")
                         for pr in weekly:
                             lines.append(f"  {pr['name']}: {fmt_num(pr['perf'])}")
-                            if pr['achieved_tier']: lines.append(f"  ✅ {fmt_num(pr['achieved_tier'])} 달성 ({fmt_num(pr['achieved_prize'])}%)")
+                            if pr['achieved_tier']: lines.append(f"  ✅ {fmt_num(pr['achieved_tier'])} 구간 달성")
                             if pr['next_tier']: lines.append(f"  🎯 다음 {fmt_num(pr['next_tier'])}까지"); lines.append(f"  🔴 부족: {fmt_num(pr['shortfall'])}")
                             lines.append("")
                     if cumul:
