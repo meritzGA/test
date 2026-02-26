@@ -47,16 +47,16 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 /* Primary 버튼 */
 .stButton > button[kind="primary"],[data-testid="stFormSubmitButton"]>button { background:rgb(var(--mr)) !important; color:#fff !important; border:none !important; padding:6px 10px !important; font-size:13px !important; }
 /* 리스트 카드 */
-.lc { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:8px 12px 6px; margin-bottom:0; }
+.lc { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:10px 14px 8px; margin-bottom:0; }
 .lc-top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
 .lc-info { flex:1; min-width:0; }
-.lc-org { font-size:12px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.3; font-weight:500; }
-.lc-name { font-size:16px; font-weight:800; color:var(--text1); line-height:1.3; }
+.lc-org { font-size:14px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.3; font-weight:600; }
+.lc-name { font-size:20px; font-weight:900; color:var(--text1); line-height:1.25; letter-spacing:-0.5px; }
 .lc-perfs { display:flex; gap:4px; flex-shrink:0; }
-.lc-pill { display:inline-flex; align-items:center; justify-content:center; min-width:50px; height:24px; border-radius:12px; font-size:12px; font-weight:800; padding:0 8px; }
+.lc-pill { display:inline-flex; align-items:center; justify-content:center; min-width:54px; height:26px; border-radius:13px; font-size:13px; font-weight:800; padding:0 8px; }
 .lc-pill.r { background:rgba(var(--mr),0.1); color:rgb(var(--mr)); }
 .lc-pill.g { background:#e8f5e9; color:#2e7d32; }
-.lc-bottom { display:flex; gap:4px; margin-top:5px; }
+.lc-bottom { display:flex; gap:4px; margin-top:6px; }
 .lc-dot { display:flex; align-items:center; gap:3px; font-size:11px; color:var(--text3); padding:2px 6px; border-radius:5px; background:#f7f8fa; font-weight:500; }
 .lc-dot.done { background:rgba(0,196,113,0.12); color:#00a85e; font-weight:700; }
 .lc-dot .dot { width:7px; height:7px; border-radius:50%; background:#d5d8db; flex-shrink:0; }
@@ -598,7 +598,7 @@ elif menu=="📱 매니저 화면":
     with hc2: st.write(""); st.write("")
     if hc2.button("🚪"): st.session_state['mgr_in']=False; st.session_state['sel_cust']=None; st.rerun()
     # 메트릭
-    smry=get_mgr_summary(mgr_c); ml={1:"①인사",2:"②인사+리플렛",3:"③종합"}
+    smry=get_mgr_summary(mgr_c); ml={1:"①인사",2:"②인사+리플렛",3:"③실적 및 시상"}
     mh="<div class='metric-row'>"
     for mt,lb in ml.items():
         inf=smry.get(mt,{'customers':0,'count':0}); ac=" active" if inf['customers']>0 else ""
@@ -612,7 +612,7 @@ elif menu=="📱 매니저 화면":
         if srch: fdf=fdf[fdf.apply(lambda r: srch.lower() in str(r.values).lower(),axis=1)]
         list_c=st.container(height=600)
         with list_c:
-            dot_labels={1:"인사",2:"인사+리플렛",3:"종합"}
+            dot_labels={1:"인사",2:"인사+리플렛",3:"실적/시상"}
             for idx,row in fdf.iterrows():
                 co=resolve_val(row,_cba,_cbb) or resolve_val(row,'현재대리점지사명','대리점지사명')
                 cn=resolve_val(row,_cna,_cnb) or resolve_val(row,'현재대리점설계사조직명','대리점설계사명') or safe_str(row.get('본인고객번호',''))
@@ -649,7 +649,7 @@ elif menu=="📱 매니저 화면":
                     <div class='lc-bottom'>{dots_h}</div>
                 </div>"""
                 st.markdown(card_h,unsafe_allow_html=True)
-                if st.button(f"▸ {cn}",key=f"c_{idx}",use_container_width=True):
+                if st.button("Touch",key=f"c_{idx}",use_container_width=True):
                     cr={k:(safe_str(v) if not isinstance(v,(int,float,np.integer,np.floating)) or pd.isna(v) else v) for k,v in row.to_dict().items()}
                     st.session_state['sel_cust']={'idx':idx,'name':cn,'org':co,'code':cc_,'num':cnum,'row':cr}; st.rerun()
 
@@ -674,7 +674,7 @@ elif menu=="📱 매니저 화면":
                 ih+="</div></div>"; st.markdown(ih,unsafe_allow_html=True)
 
                 # 메시지 탭 3개
-                t1,t2,t3=st.tabs(["①인사말","②인사+리플렛","③종합"])
+                t1,t2,t3=st.tabs(["①인사말","②인사+리플렛","③실적 및 시상"])
 
                 with t1:
                     prefs=load_user_prefs(mgr_c); saved_gr=prefs.get('greeting','')
@@ -693,31 +693,36 @@ elif menu=="📱 매니저 화면":
                         if st.button("✅ 발송 기록",key=f"l1_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,1); st.success("✅"); st.rerun()
 
                 with t2:
-                    # 인사말 + 리플렛 결합
+                    # 인사말 + 리플렛을 함께 보내기
                     prefs=load_user_prefs(mgr_c); saved_gr=prefs.get('greeting','')
+                    st.markdown("<p style='font-size:13px;color:var(--text2);margin-bottom:4px;'>💡 인사말 카톡 → 리플렛 이미지 순서로 보내세요</p>",unsafe_allow_html=True)
                     # 리플렛 업로드
                     lf=st.file_uploader("리플렛 이미지 (한번 저장하면 유지)",type=["png","jpg","jpeg"],key=f"lf_{cnum}")
                     if lf:
                         prefs['leaflet']=lf.getvalue(); prefs['leaflet_name']=lf.name; save_user_prefs(prefs,mgr_c)
                     lb=prefs.get('leaflet'); ln=prefs.get('leaflet_name','')
-                    if lb:
-                        st.image(lb,caption=ln,use_container_width=True)
-                    else:
-                        st.caption("📷 리플렛 이미지를 업로드하세요")
-                    # 인사말 텍스트
+                    # STEP 1: 인사말 카톡
+                    st.markdown("<p style='font-size:14px;font-weight:700;margin:8px 0 4px;'>📝 STEP 1. 인사말 보내기</p>",unsafe_allow_html=True)
                     sm2=''
                     if saved_gr:
-                        sm2=f"안녕하세요, {cn}님!\n{mgr_n} 매니저입니다.\n\n{saved_gr}"; st.session_state[f'msg2_{cnum}']=sm2
+                        sm2=f"안녕하세요, {cn}님!\n{mgr_n} 매니저입니다.\n\n{saved_gr}"
                     if sm2:
-                        st.text_area("인사말 미리보기",sm2,height=60,disabled=True,key=f"p2t_{cnum}")
+                        st.text_area("인사말",sm2,height=60,disabled=True,key=f"p2t_{cnum}")
                         render_kakao(sm2,"📋 인사말 카톡",f"k2t_{cnum}",45)
+                    else:
+                        st.caption("①인사말 탭에서 인사말을 먼저 저장하세요")
+                    # STEP 2: 리플렛 이미지
+                    st.markdown("<p style='font-size:14px;font-weight:700;margin:8px 0 4px;'>🖼️ STEP 2. 리플렛 보내기</p>",unsafe_allow_html=True)
                     if lb:
+                        st.image(lb,caption=ln,use_container_width=True)
                         render_img_share(lb,ln,f"is_{cnum}",50)
+                    else:
+                        st.caption("📷 위에서 리플렛 이미지를 업로드하세요")
                     if sm2 or lb:
                         if st.button("✅ 발송 기록",key=f"l2_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,2); st.success("✅"); st.rerun()
 
                 with t3:
-                    # 종합 — 실적 + 시상
+                    # 실적 및 시상
                     lines=["📋 메리츠 시상 현황 안내",f"📅 {datetime.now().strftime('%Y.%m.%d')} 기준",""]
                     if dcfg:
                         lines.append("━━ 실적 ━━")
@@ -753,7 +758,7 @@ elif menu=="📱 매니저 화면":
                     if len(lines)>5:
                         msg="\n".join(lines)
                         st.text_area("미리보기",msg,height=200,disabled=True,key=f"p3_{cnum}")
-                        render_kakao(msg,"📋 종합 카톡",f"k3_{cnum}",45)
+                        render_kakao(msg,"📋 실적 및 시상 카톡",f"k3_{cnum}",45)
                         if st.button("✅ 발송 기록",key=f"l3_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,3); st.success("✅"); st.rerun()
                     else: st.info("실적/시상 데이터가 없습니다")
 
