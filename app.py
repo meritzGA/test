@@ -70,10 +70,52 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .perf-tag { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:3px 8px; font-size:12px; }
 .perf-tag .pk { color:var(--text3); margin-right:3px; font-size:11px; }
 .perf-tag .pv { font-weight:700; color:var(--text1); }
-/* 활동률 바 */
-.act-bar-wrap { background:#f0f1f3; border-radius:6px; height:20px; position:relative; overflow:hidden; }
-.act-bar-fill { height:100%; border-radius:6px; background:linear-gradient(90deg,rgb(128,0,0),rgb(180,40,40)); transition:width .3s; }
-.act-bar-text { position:absolute; top:0; left:0; right:0; text-align:center; font-size:11px; font-weight:700; color:#fff; line-height:20px; }
+/* 카드뉴스 실적/시상 — 대형 */
+.card-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin:8px 0; }
+.data-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 12px 12px; text-align:center; position:relative; overflow:hidden; }
+.data-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; border-radius:14px 14px 0 0; }
+.data-card .dc-label { font-size:11px; color:var(--text3); font-weight:700; margin-bottom:4px; letter-spacing:-0.3px; }
+.data-card .dc-value { font-size:28px; font-weight:900; color:var(--text1); line-height:1.1; letter-spacing:-1px; }
+.data-card .dc-sub { font-size:10px; color:var(--text3); margin-top:3px; font-weight:500; }
+.data-card.perf { background:linear-gradient(135deg,#f8f9fb,#eef0f4); border-color:#d8dce3; }
+.data-card.perf::before { background:linear-gradient(90deg,#4a5568,#718096); }
+.data-card.perf .dc-value { color:#2d3748; }
+.data-card.prize { background:linear-gradient(135deg,rgba(var(--mr),0.06),rgba(var(--mr),0.02)); border-color:rgba(var(--mr),0.25); }
+.data-card.prize::before { background:linear-gradient(90deg,rgb(var(--mr)),rgb(180,40,40)); }
+.data-card.prize .dc-value { color:var(--red); }
+.data-card.prize .dc-label { color:rgb(var(--mr)); }
+.data-card.target { background:linear-gradient(135deg,#fff8e1,#fff3e0); border-color:rgba(255,149,0,0.3); }
+.data-card.target::before { background:linear-gradient(90deg,#ff9500,#ffb300); }
+.data-card.target .dc-value { color:#e65100; }
+.data-card.target .dc-label { color:#f57c00; }
+.data-card.short { background:linear-gradient(135deg,#fce4ec,#ffebee); border-color:rgba(198,40,40,0.25); }
+.data-card.short::before { background:linear-gradient(90deg,#c62828,#e53935); }
+.data-card.short .dc-value { color:#b71c1c; }
+.data-card.short .dc-label { color:#c62828; }
+.data-card.ok { background:linear-gradient(135deg,#e8f5e9,#f1f8e9); border-color:rgba(0,196,113,0.3); }
+.data-card.ok::before { background:linear-gradient(90deg,#00c471,#43a047); }
+.data-card.ok .dc-value { color:#1b5e20; }
+.data-card.ok .dc-label { color:#2e7d32; }
+/* 모니터링 4칼럼 그리드 */
+.stat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:12px 0; }
+.stat-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 14px; transition:all .15s; position:relative; overflow:hidden; }
+.stat-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; border-radius:14px 14px 0 0; }
+.stat-card:hover { border-color:rgba(var(--mr),0.3); box-shadow:0 4px 12px rgba(0,0,0,0.08); transform:translateY(-1px); }
+.stat-card .sc-name { font-size:13px; font-weight:700; color:var(--text1); margin-bottom:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stat-card .sc-rate { font-size:32px; font-weight:900; line-height:1; margin-bottom:6px; letter-spacing:-1.5px; }
+.stat-card .sc-detail { font-size:11px; color:var(--text3); font-weight:500; }
+@media(max-width:768px) {
+    .card-grid { grid-template-columns:repeat(2,1fr); gap:6px; }
+    .data-card .dc-value { font-size:22px; }
+    .stat-grid { grid-template-columns:repeat(2,1fr); gap:8px; }
+    .stat-card .sc-rate { font-size:26px; }
+}
+@media(max-width:480px) {
+    .card-grid { grid-template-columns:repeat(2,1fr); }
+    .data-card .dc-value { font-size:20px; }
+    .stat-grid { grid-template-columns:repeat(2,1fr); }
+    .stat-card .sc-rate { font-size:22px; }
+}
 /* 파일 카드 */
 .file-card { background:var(--card); border-radius:12px; padding:14px; border:1px solid var(--border); margin-bottom:6px; }
 .file-card.loaded { border-color:rgba(0,196,113,0.3); background:rgba(0,196,113,0.02); }
@@ -584,10 +626,10 @@ elif menu=="📱 매니저 화면":
                     ih+=f"<span class='ib {'done' if mt in stypes else 'wait'}'>{lb}{'✓' if mt in stypes else ''}</span>"
                 ih+="</div></div>"; st.markdown(ih,unsafe_allow_html=True)
 
-                # 실적 + 시상 밀착 배치
-                has_perf=False
+                # ── 카드뉴스: 실적 + 시상 ──
+                cards = []
+                # 실적 데이터
                 if dcfg:
-                    pt=[]
                     for col in dcfg:
                         val=crow.get(col)
                         if val is None:
@@ -596,18 +638,34 @@ elif menu=="📱 매니저 화면":
                         dv=safe_str(val)
                         if not dv or dv in ('0','0.0'): continue
                         if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
-                        if dv: pt.append((col,dv))
-                    if pt:
-                        has_perf=True
-                        ph="<div class='perf-inline'>"
-                        for k,v in pt: ph+=f"<span class='perf-tag'><span class='pk'>{k}</span><span class='pv'>{v}</span></span>"
-                        ph+="</div>"; st.markdown(ph,unsafe_allow_html=True)
-
+                        if dv:
+                            cls='short' if '부족' in col else ('target' if '목표' in col else 'perf')
+                            cards.append((col, dv, cls))
+                # 시상 데이터 — 시책별 실적/시상금/목표/부족 카드
                 if pcfg:
                     prs=calc_prize(crow,pcfg)
-                    ph="<div style='margin:2px 0;'>"
-                    for pr in prs: ph+=prize_line_html(pr)
-                    ph+="</div>"; st.markdown(ph,unsafe_allow_html=True)
+                    for pr in prs:
+                        nm=pr.get('name','')
+                        pf=pr['perf']
+                        pf_s=fmt_num(pf) if pf else '0'
+                        # 실적 카드
+                        cards.append((f"📊 {nm} 실적", pf_s, 'perf'))
+                        # 시상금 카드
+                        if pr['existing_prize']>0:
+                            cards.append((f"💰 {nm} 시상금", f"{fmt_num(pr['existing_prize'])}원", 'ok'))
+                        else:
+                            cards.append((f"💰 {nm} 시상금", "—", ''))
+                        # 목표/부족 or 달성
+                        if pr['next_tier']:
+                            cards.append((f"🎯 {nm} 목표", fmt_num(pr['next_tier']), 'target'))
+                            cards.append((f"⚡ {nm} 부족", fmt_num(pr['shortfall']), 'short'))
+                        elif pr['achieved_tier']:
+                            cards.append((f"🎉 {nm}", "최고구간 달성!", 'ok'))
+                if cards:
+                    ch="<div class='card-grid'>"
+                    for label, val, cls in cards:
+                        ch+=f"<div class='data-card {cls}'><div class='dc-label'>{label}</div><div class='dc-value'>{val}</div></div>"
+                    ch+="</div>"; st.markdown(ch, unsafe_allow_html=True)
 
                 # 메시지
                 st.markdown("<p style='font-size:14px;font-weight:700;margin:6px 0 2px;color:var(--text2);'>📤 메시지</p>",unsafe_allow_html=True)
@@ -713,7 +771,7 @@ elif menu=="📱 매니저 화면":
                         if st.button("✅ 기록",key=f"l4_{cnum}",type="primary"): log_msg(mgr_c,mgr_n,cnum,cn,4); st.success("✅"); st.rerun()
 
 # =============================================================
-# 10. 모니터링 — 본부/지점/매니저별 활동률
+# 10. 모니터링 — 총괄→본부→지점 드릴다운
 # =============================================================
 elif menu=="📊 활동 모니터링":
     st.markdown("<h2 style='font-weight:800;'>📊 활동 모니터링</h2>",unsafe_allow_html=True)
@@ -734,114 +792,118 @@ elif menu=="📊 활동 모니터링":
     tp=int(mdf['발송인원'].sum()) if not mdf.empty else 0
     st.markdown(f"<div class='mon-row'><div class='mon-card red'><div class='mc-label'>로그인</div><div class='mc-num'>{tm}</div><div class='mc-sub'>명</div></div><div class='mon-card'><div class='mc-label'>발송</div><div class='mc-num'>{tc}</div><div class='mc-sub'>건</div></div><div class='mon-card'><div class='mc-label'>대상</div><div class='mc-num'>{tp}</div><div class='mc-sub'>명</div></div></div>",unsafe_allow_html=True)
 
-    # 본부/지점/매니저별 활동률 계산
-    if has_data() and not mdf.empty:
+    if has_data():
         df_all=st.session_state['df_merged'].copy()
         mc1_=st.session_state.get('manager_col',''); mc2_=st.session_state.get('manager_col2','')
         mn_col_=st.session_state.get('manager_name_col','')
-
-        # 본부/지점 열 (파일A/B 자동 resolve)
-        HQ_COLS = ('현재영업단조직명','지역단조직명')   # 본부
-        BR_COLS = ('현재지점조직명','지점조직명')       # 지점
+        HQ_COLS=('현재영업단조직명','지역단조직명'); BR_COLS=('현재지점조직명','지점조직명')
 
         # 매니저별 정보 수집
-        mgr_info = {}  # code -> {total, hq, branch, name}
-        all_mgr_cols = [mc1_] + ([mc2_] if mc2_ and mc2_ in df_all.columns else [])
-        for mc_col in all_mgr_cols:
+        mgr_info={}
+        all_mc=[mc1_]+([mc2_] if mc2_ and mc2_ in df_all.columns else [])
+        for mc_col in all_mc:
             if mc_col not in df_all.columns: continue
-            df_all[f'_ck_{mc_col}'] = df_all[mc_col].apply(clean_key)
+            df_all[f'_ck_{mc_col}']=df_all[mc_col].apply(clean_key)
             for k in df_all[f'_ck_{mc_col}'].unique():
                 if not k or k in mgr_info: continue
-                sub = df_all[df_all[f'_ck_{mc_col}']==k]
-                row0 = sub.iloc[0].to_dict()
-                hq = resolve_val(row0, HQ_COLS[0], HQ_COLS[1]) or '(미지정)'
-                br = resolve_val(row0, BR_COLS[0], BR_COLS[1]) or '(미지정)'
-                nm = safe_str(row0.get(mn_col_,'')) if mn_col_ else k
-                mgr_info[k] = {'total':len(sub), 'hq':hq, 'branch':br, 'name':nm or k}
+                sub=df_all[df_all[f'_ck_{mc_col}']==k]
+                r0=sub.iloc[0].to_dict()
+                hq=resolve_val(r0,HQ_COLS[0],HQ_COLS[1]) or '(미지정)'
+                br=resolve_val(r0,BR_COLS[0],BR_COLS[1]) or '(미지정)'
+                nm=safe_str(r0.get(mn_col_,'')) if mn_col_ else k
+                mgr_info[k]={'total':len(sub),'hq':hq,'branch':br,'name':nm or k}
 
-        # 매니저별 발송 인원
-        mgr_sent = {}
-        for _,r in mdf.iterrows():
-            k = clean_key(str(r['매니저코드']))
-            if k not in mgr_sent: mgr_sent[k] = 0
-            mgr_sent[k] = max(mgr_sent[k], int(r['발송인원']))
-            if k not in mgr_info:
-                mgr_info[k] = {'total':0,'hq':'(미지정)','branch':'(미지정)','name':r['매니저명'] or k}
+        mgr_sent={}
+        if not mdf.empty:
+            for _,r in mdf.iterrows():
+                k=clean_key(str(r['매니저코드']))
+                if k not in mgr_sent: mgr_sent[k]=0
+                mgr_sent[k]=max(mgr_sent[k],int(r['발송인원']))
+                if k not in mgr_info: mgr_info[k]={'total':0,'hq':'(미지정)','branch':'(미지정)','name':r['매니저명'] or k}
 
-        # 본부별 집계
-        hq_stats = {}  # hq -> {total, sent, branches: {br -> {total, sent, mgrs:[]}}}
+        # 계층 집계
+        hq_stats={}
         for k,info in mgr_info.items():
-            hq = info['hq']; br = info['branch']
-            snt = mgr_sent.get(k, 0); tot = info['total']
-            if hq not in hq_stats: hq_stats[hq] = {'total':0,'sent':0,'branches':{}}
-            hq_stats[hq]['total'] += tot; hq_stats[hq]['sent'] += snt
-            if br not in hq_stats[hq]['branches']: hq_stats[hq]['branches'][br] = {'total':0,'sent':0,'mgrs':[]}
-            hq_stats[hq]['branches'][br]['total'] += tot
-            hq_stats[hq]['branches'][br]['sent'] += snt
-            rate = round(snt/tot*100) if tot>0 else 0
+            hq=info['hq']; br=info['branch']; snt=mgr_sent.get(k,0); tot=info['total']
+            if hq not in hq_stats: hq_stats[hq]={'total':0,'sent':0,'branches':{}}
+            hq_stats[hq]['total']+=tot; hq_stats[hq]['sent']+=snt
+            if br not in hq_stats[hq]['branches']: hq_stats[hq]['branches'][br]={'total':0,'sent':0,'mgrs':[]}
+            hq_stats[hq]['branches'][br]['total']+=tot; hq_stats[hq]['branches'][br]['sent']+=snt
+            rate=round(snt/tot*100) if tot>0 else 0
             hq_stats[hq]['branches'][br]['mgrs'].append({'code':k,'name':info['name'],'total':tot,'sent':snt,'rate':rate})
 
-        def bar_color(rate): return '#00c471' if rate>=80 else ('#ff9500' if rate>=50 else 'rgb(128,0,0)')
+        def rc(rate): return '#00c471' if rate>=80 else ('#ff9500' if rate>=50 else 'rgb(128,0,0)')
 
-        # ── 본부별 활동률 ──
-        st.markdown("#### 🏛️ 본부별 활동률")
-        sorted_hqs = sorted(hq_stats.items(), key=lambda x: x[1]['sent']/max(x[1]['total'],1), reverse=True)
-        for hq_name, hs in sorted_hqs:
-            rate = round(hs['sent']/hs['total']*100) if hs['total']>0 else 0
-            bc = bar_color(rate)
-            st.markdown(f"""<div style='background:#fff;border:1px solid #eaedf0;border-radius:12px;padding:12px 16px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,0.04);'>
-                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;'>
-                    <span style='font-size:15px;font-weight:800;color:#191f28;'>🏛️ {hq_name}</span>
-                    <span style='font-size:16px;font-weight:800;color:{bc};'>{rate}%</span>
-                </div>
-                <div class='act-bar-wrap'><div class='act-bar-fill' style='width:{min(rate,100)}%;background:{bc};'></div>
-                <div class='act-bar-text' style='color:{"#fff" if rate>15 else "#333"};'>{hs['sent']}/{hs['total']}명</div></div>
-                <div style='font-size:11px;color:#8b95a1;margin-top:3px;'>지점 {len(hs["branches"])}개 · 매니저 {sum(len(b["mgrs"]) for b in hs["branches"].values())}명</div>
-            </div>""", unsafe_allow_html=True)
+        # 드릴다운 네비게이션
+        view_options=["📊 총괄"]+[f"🏛️ {hq}" for hq in sorted(hq_stats.keys())]
+        sel_view=st.selectbox("보기",view_options,key="mv")
 
-        # ── 지점별 활동률 ──
-        st.markdown("#### 🏢 지점별 활동률")
-        all_branches = []
-        for hq_name, hs in sorted_hqs:
-            for br_name, bs in hs['branches'].items():
-                all_branches.append((hq_name, br_name, bs))
-        all_branches.sort(key=lambda x: x[2]['sent']/max(x[2]['total'],1), reverse=True)
-        for hq_name, br_name, bs in all_branches:
-            rate = round(bs['sent']/bs['total']*100) if bs['total']>0 else 0
-            bc = bar_color(rate)
-            st.markdown(f"""<div style='background:#fff;border:1px solid #eaedf0;border-radius:10px;padding:10px 14px;margin-bottom:5px;'>
-                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
-                    <div><span style='font-size:13px;font-weight:700;'>{br_name}</span><span style='font-size:10px;color:#8b95a1;margin-left:6px;'>{hq_name}</span></div>
-                    <span style='font-size:13px;font-weight:800;color:{bc};'>{rate}%</span>
-                </div>
-                <div class='act-bar-wrap'><div class='act-bar-fill' style='width:{min(rate,100)}%;background:{bc};'></div>
-                <div class='act-bar-text' style='color:{"#fff" if rate>15 else "#333"};'>{bs['sent']}/{bs['total']}명</div></div>
-            </div>""", unsafe_allow_html=True)
+        if sel_view=="📊 총괄":
+            # ── 총괄: 본부별 4칼럼 그리드 ──
+            st.markdown("#### 🏛️ 본부별 활동률")
+            sorted_hqs=sorted(hq_stats.items(),key=lambda x:x[1]['sent']/max(x[1]['total'],1),reverse=True)
+            gh="<div class='stat-grid'>"
+            for hq_name,hs in sorted_hqs:
+                rate=round(hs['sent']/hs['total']*100) if hs['total']>0 else 0; c=rc(rate)
+                n_br=len(hs['branches']); n_mgr=sum(len(b['mgrs']) for b in hs['branches'].values())
+                gh+=f"""<div class='stat-card' style='border-top:3px solid {c};'>
+                    <div class='sc-name'>{hq_name}</div>
+                    <div class='sc-rate' style='color:{c};'>{rate}%</div>
+                    <div style='background:#f0f1f3;border-radius:4px;height:8px;margin-bottom:6px;overflow:hidden;'>
+                        <div style='height:100%;width:{min(rate,100)}%;background:{c};border-radius:4px;'></div></div>
+                    <div class='sc-detail'>{hs['sent']}/{hs['total']}명</div>
+                    <div class='sc-detail'>지점 {n_br}개 · 매니저 {n_mgr}명</div>
+                </div>"""
+            gh+="</div>"; st.markdown(gh,unsafe_allow_html=True)
 
-        # ── 매니저별 상세 리스트 ──
-        st.markdown("#### 👤 매니저별 활동 현황")
-        mgr_list = []
-        for hq_name, hs in sorted_hqs:
-            for br_name, bs in hs['branches'].items():
-                for m in bs['mgrs']:
-                    mgr_list.append({**m, 'hq':hq_name, 'branch':br_name})
-        mgr_list.sort(key=lambda x: x['rate'], reverse=True)
-        mgr_df = pd.DataFrame(mgr_list)
-        if not mgr_df.empty:
-            mgr_df = mgr_df.rename(columns={'hq':'본부','branch':'지점','name':'매니저','total':'사용인수','sent':'활동인원','rate':'활동률%'})
-            mgr_df = mgr_df[['본부','지점','매니저','사용인수','활동인원','활동률%']]
-            st.dataframe(mgr_df, use_container_width=True, hide_index=True)
-    elif not mdf.empty:
-        st.markdown("#### 📤 발송"); mlm={1:"①인사",2:"②리플렛",3:"③시상",4:"④종합"}; mdf['메시지유형']=mdf['메시지유형'].map(mlm)
-        pc=mdf.pivot_table(index=['매니저코드','매니저명'],columns='메시지유형',values='발송인원',fill_value=0).reset_index()
-        st.dataframe(pc,use_container_width=True,hide_index=True)
+            # 매니저 전체 리스트
+            st.markdown("#### 👤 매니저별")
+            ml_all=[]
+            for hq_name,hs in sorted_hqs:
+                for br_name,bs in hs['branches'].items():
+                    for m in bs['mgrs']: ml_all.append({**m,'hq':hq_name,'branch':br_name})
+            ml_all.sort(key=lambda x:x['rate'],reverse=True)
+            if ml_all:
+                mdf2=pd.DataFrame(ml_all).rename(columns={'hq':'본부','branch':'지점','name':'매니저','total':'사용인','sent':'활동','rate':'%'})
+                st.dataframe(mdf2[['본부','지점','매니저','사용인','활동','%']],use_container_width=True,hide_index=True)
+
+        else:
+            # ── 본부 선택: 지점별 4칼럼 그리드 ──
+            sel_hq=sel_view.replace("🏛️ ","")
+            hs=hq_stats.get(sel_hq,{'total':0,'sent':0,'branches':{}})
+            hq_rate=round(hs['sent']/hs['total']*100) if hs['total']>0 else 0
+            st.markdown(f"<div style='background:linear-gradient(135deg,rgb(128,0,0),rgb(80,0,0));padding:16px 20px;border-radius:14px;margin-bottom:12px;color:#fff;'>"
+                f"<div style='font-size:20px;font-weight:800;'>{sel_hq}</div>"
+                f"<div style='font-size:14px;opacity:0.85;margin-top:4px;'>활동률 {hq_rate}% · {hs['sent']}/{hs['total']}명</div></div>",unsafe_allow_html=True)
+
+            st.markdown("#### 🏢 지점별 활동률")
+            sorted_brs=sorted(hs['branches'].items(),key=lambda x:x[0])
+            gh="<div class='stat-grid'>"
+            for br_name,bs in sorted_brs:
+                rate=round(bs['sent']/bs['total']*100) if bs['total']>0 else 0; c=rc(rate)
+                gh+=f"""<div class='stat-card' style='border-top:3px solid {c};'>
+                    <div class='sc-name'>{br_name}</div>
+                    <div class='sc-rate' style='color:{c};'>{rate}%</div>
+                    <div style='background:#f0f1f3;border-radius:4px;height:8px;margin-bottom:6px;overflow:hidden;'>
+                        <div style='height:100%;width:{min(rate,100)}%;background:{c};border-radius:4px;'></div></div>
+                    <div class='sc-detail'>{bs['sent']}/{bs['total']}명 · 매니저 {len(bs['mgrs'])}명</div>
+                </div>"""
+            gh+="</div>"; st.markdown(gh,unsafe_allow_html=True)
+
+            # 매니저 리스트
+            st.markdown("#### 👤 매니저별")
+            ml_hq=[]
+            for br_name,bs in sorted_brs:
+                for m in bs['mgrs']: ml_hq.append({**m,'branch':br_name})
+            ml_hq.sort(key=lambda x:x['rate'],reverse=True)
+            if ml_hq:
+                mdf2=pd.DataFrame(ml_hq).rename(columns={'branch':'지점','name':'매니저','total':'사용인','sent':'활동','rate':'%'})
+                st.dataframe(mdf2[['지점','매니저','사용인','활동','%']],use_container_width=True,hide_index=True)
 
     if not ldf.empty:
         with st.expander("🔐 로그인 상세"): st.dataframe(ldf,use_container_width=True,hide_index=True)
-
     if not mdf.empty:
         csv=mdf.to_csv(index=False).encode('utf-8-sig'); st.download_button("📥 CSV",csv,f"s_{sel_mk}.csv","text/csv")
-
     st.markdown("---")
     c1_,c2_=st.columns(2)
     with c1_:
