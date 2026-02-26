@@ -70,32 +70,13 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .perf-tag { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:3px 8px; font-size:12px; }
 .perf-tag .pk { color:var(--text3); margin-right:3px; font-size:11px; }
 .perf-tag .pv { font-weight:700; color:var(--text1); }
-/* 카드뉴스 실적/시상 — 대형 */
+/* 카드뉴스 — 2색 단순 */
 .card-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin:8px 0; }
-.data-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 12px 12px; text-align:center; position:relative; overflow:hidden; }
-.data-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; border-radius:14px 14px 0 0; }
+.data-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 12px 12px; text-align:center; }
 .data-card .dc-label { font-size:11px; color:var(--text3); font-weight:700; margin-bottom:4px; letter-spacing:-0.3px; }
-.data-card .dc-value { font-size:28px; font-weight:900; color:var(--text1); line-height:1.1; letter-spacing:-1px; }
-.data-card .dc-sub { font-size:10px; color:var(--text3); margin-top:3px; font-weight:500; }
-.data-card.perf { background:linear-gradient(135deg,#f8f9fb,#eef0f4); border-color:#d8dce3; }
-.data-card.perf::before { background:linear-gradient(90deg,#4a5568,#718096); }
-.data-card.perf .dc-value { color:#2d3748; }
-.data-card.prize { background:linear-gradient(135deg,rgba(var(--mr),0.06),rgba(var(--mr),0.02)); border-color:rgba(var(--mr),0.25); }
-.data-card.prize::before { background:linear-gradient(90deg,rgb(var(--mr)),rgb(180,40,40)); }
-.data-card.prize .dc-value { color:var(--red); }
-.data-card.prize .dc-label { color:rgb(var(--mr)); }
-.data-card.target { background:linear-gradient(135deg,#fff8e1,#fff3e0); border-color:rgba(255,149,0,0.3); }
-.data-card.target::before { background:linear-gradient(90deg,#ff9500,#ffb300); }
-.data-card.target .dc-value { color:#e65100; }
-.data-card.target .dc-label { color:#f57c00; }
-.data-card.short { background:linear-gradient(135deg,#fce4ec,#ffebee); border-color:rgba(198,40,40,0.25); }
-.data-card.short::before { background:linear-gradient(90deg,#c62828,#e53935); }
-.data-card.short .dc-value { color:#b71c1c; }
-.data-card.short .dc-label { color:#c62828; }
-.data-card.ok { background:linear-gradient(135deg,#e8f5e9,#f1f8e9); border-color:rgba(0,196,113,0.3); }
-.data-card.ok::before { background:linear-gradient(90deg,#00c471,#43a047); }
-.data-card.ok .dc-value { color:#1b5e20; }
-.data-card.ok .dc-label { color:#2e7d32; }
+.data-card .dc-value { font-size:26px; font-weight:900; color:var(--text1); line-height:1.1; letter-spacing:-1px; }
+.data-card.accent { border-color:rgba(var(--mr),0.2); }
+.data-card.accent .dc-value { color:rgb(var(--mr)); }
 /* 모니터링 4칼럼 그리드 */
 .stat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:12px 0; }
 .stat-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 14px; transition:all .15s; position:relative; overflow:hidden; }
@@ -106,13 +87,12 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .stat-card .sc-detail { font-size:11px; color:var(--text3); font-weight:500; }
 @media(max-width:768px) {
     .card-grid { grid-template-columns:repeat(2,1fr); gap:6px; }
-    .data-card .dc-value { font-size:22px; }
+    .data-card .dc-value { font-size:20px; }
     .stat-grid { grid-template-columns:repeat(2,1fr); gap:8px; }
     .stat-card .sc-rate { font-size:26px; }
 }
 @media(max-width:480px) {
-    .card-grid { grid-template-columns:repeat(2,1fr); }
-    .data-card .dc-value { font-size:20px; }
+    .data-card .dc-value { font-size:18px; }
     .stat-grid { grid-template-columns:repeat(2,1fr); }
     .stat-card .sc-rate { font-size:22px; }
 }
@@ -176,6 +156,16 @@ def fmt_num(v):
         if n==0: return ""
         return f"{int(n):,}" if n==int(n) else f"{n:,.1f}"
     except: return "" if s in ("0","0.0") else s
+
+def natural_sort_key(s):
+    """자연 정렬: GA3-1, GA3-2, ... GA3-10, GA3-11"""
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', str(s))]
+
+def hq_sort_key(name):
+    """본부 정렬: GA숫자 먼저(번호순), 그 다음 한글(가나다순)"""
+    m = re.match(r'GA(\d+)', str(name))
+    if m: return (0, int(m.group(1)), str(name))
+    return (1, 0, str(name))
 
 def sanitize_dataframe(df):
     if df is None or df.empty: return df
@@ -626,11 +616,10 @@ elif menu=="📱 매니저 화면":
                     ih+=f"<span class='ib {'done' if mt in stypes else 'wait'}'>{lb}{'✓' if mt in stypes else ''}</span>"
                 ih+="</div></div>"; st.markdown(ih,unsafe_allow_html=True)
 
-                # ── 카드뉴스: 실적 + 시상 ──
+                # ── 카드뉴스: 관리자 설정 항목만 표시 ──
                 cards = []
-                # 실적 데이터
                 if dcfg:
-                    for col in dcfg:
+                    for i, col in enumerate(dcfg):
                         val=crow.get(col)
                         if val is None:
                             for sfx in ['_파일1','_파일2']:
@@ -639,28 +628,8 @@ elif menu=="📱 매니저 화면":
                         if not dv or dv in ('0','0.0'): continue
                         if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
                         if dv:
-                            cls='short' if '부족' in col else ('target' if '목표' in col else 'perf')
-                            cards.append((col, dv, cls))
-                # 시상 데이터 — 시책별 실적/시상금/목표/부족 카드
-                if pcfg:
-                    prs=calc_prize(crow,pcfg)
-                    for pr in prs:
-                        nm=pr.get('name','')
-                        pf=pr['perf']
-                        pf_s=fmt_num(pf) if pf else '0'
-                        # 실적 카드
-                        cards.append((f"📊 {nm} 실적", pf_s, 'perf'))
-                        # 시상금 카드
-                        if pr['existing_prize']>0:
-                            cards.append((f"💰 {nm} 시상금", f"{fmt_num(pr['existing_prize'])}원", 'ok'))
-                        else:
-                            cards.append((f"💰 {nm} 시상금", "—", ''))
-                        # 목표/부족 or 달성
-                        if pr['next_tier']:
-                            cards.append((f"🎯 {nm} 목표", fmt_num(pr['next_tier']), 'target'))
-                            cards.append((f"⚡ {nm} 부족", fmt_num(pr['shortfall']), 'short'))
-                        elif pr['achieved_tier']:
-                            cards.append((f"🎉 {nm}", "최고구간 달성!", 'ok'))
+                            use_accent = (i % 2 == 0)  # 짝수번째 accent
+                            cards.append((col, dv, 'accent' if use_accent else ''))
                 if cards:
                     ch="<div class='card-grid'>"
                     for label, val, cls in cards:
@@ -835,13 +804,13 @@ elif menu=="📊 활동 모니터링":
         def rc(rate): return '#00c471' if rate>=80 else ('#ff9500' if rate>=50 else 'rgb(128,0,0)')
 
         # 드릴다운 네비게이션
-        view_options=["📊 총괄"]+[f"🏛️ {hq}" for hq in sorted(hq_stats.keys())]
+        view_options=["📊 총괄"]+[f"🏛️ {hq}" for hq in sorted(hq_stats.keys(), key=hq_sort_key)]
         sel_view=st.selectbox("보기",view_options,key="mv")
 
         if sel_view=="📊 총괄":
             # ── 총괄: 본부별 4칼럼 그리드 ──
             st.markdown("#### 🏛️ 본부별 활동률")
-            sorted_hqs=sorted(hq_stats.items(),key=lambda x:x[1]['sent']/max(x[1]['total'],1),reverse=True)
+            sorted_hqs=sorted(hq_stats.items(),key=lambda x:hq_sort_key(x[0]))
             gh="<div class='stat-grid'>"
             for hq_name,hs in sorted_hqs:
                 rate=round(hs['sent']/hs['total']*100) if hs['total']>0 else 0; c=rc(rate)
@@ -860,7 +829,7 @@ elif menu=="📊 활동 모니터링":
             st.markdown("#### 👤 매니저별")
             ml_all=[]
             for hq_name,hs in sorted_hqs:
-                for br_name,bs in hs['branches'].items():
+                for br_name,bs in sorted(hs['branches'].items(),key=lambda x:natural_sort_key(x[0])):
                     for m in bs['mgrs']: ml_all.append({**m,'hq':hq_name,'branch':br_name})
             ml_all.sort(key=lambda x:x['rate'],reverse=True)
             if ml_all:
@@ -877,7 +846,7 @@ elif menu=="📊 활동 모니터링":
                 f"<div style='font-size:14px;opacity:0.85;margin-top:4px;'>활동률 {hq_rate}% · {hs['sent']}/{hs['total']}명</div></div>",unsafe_allow_html=True)
 
             st.markdown("#### 🏢 지점별 활동률")
-            sorted_brs=sorted(hs['branches'].items(),key=lambda x:x[0])
+            sorted_brs=sorted(hs['branches'].items(),key=lambda x:natural_sort_key(x[0]))
             gh="<div class='stat-grid'>"
             for br_name,bs in sorted_brs:
                 rate=round(bs['sent']/bs['total']*100) if bs['total']>0 else 0; c=rc(rate)
