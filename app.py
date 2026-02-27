@@ -52,8 +52,10 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .lc-info { flex:1; min-width:0; }
 .lc-org { font-size:14px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.3; font-weight:600; }
 .lc-name { font-size:20px; font-weight:900; color:var(--text1); line-height:1.25; letter-spacing:-0.5px; }
-.lc-perfs { display:flex; gap:4px; flex-shrink:0; }
-.lc-pill { display:inline-flex; align-items:center; justify-content:center; min-width:54px; height:26px; border-radius:13px; font-size:13px; font-weight:800; padding:0 8px; }
+.lc-perfs { display:flex; gap:4px; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end; }
+.lc-pill { display:inline-flex; flex-direction:column; align-items:center; justify-content:center; min-width:50px; border-radius:10px; font-weight:800; padding:3px 8px; line-height:1.2; }
+.lc-pill .pl-lbl { font-size:9px; font-weight:600; opacity:0.75; }
+.lc-pill .pl-val { font-size:13px; font-weight:900; }
 .lc-pill.r { background:rgba(var(--mr),0.1); color:rgb(var(--mr)); }
 .lc-pill.g { background:#e8f5e9; color:#2e7d32; }
 .lc-bottom { display:flex; gap:4px; margin-top:6px; }
@@ -633,7 +635,7 @@ elif menu=="📱 매니저 화면":
                         if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
                         if dv:
                             pcls='r' if ci%2==0 else 'g'
-                            pills_h+=f"<span class='lc-pill {pcls}'>{dv}</span>"
+                            pills_h+=f"<span class='lc-pill {pcls}'><span class='pl-lbl'>{col}</span><span class='pl-val'>{dv}</span></span>"
                 # 발송 dots
                 dots_h=""
                 for mt_id,mt_lbl in dot_labels.items():
