@@ -1250,10 +1250,27 @@ else:
             calc_results, total_prize = calculate_agent_performance(final_target_code)
             
             if calc_results:
+                # 🌟 대리점/지사명 조회
+                display_name = user_name
+                for cfg in st.session_state['config']:
+                    df = st.session_state['raw_data'].get(cfg.get('file'))
+                    if df is None: continue
+                    col_code = cfg.get('col_code', '')
+                    col_agency = cfg.get('col_agency', '')
+                    if not col_code or col_code not in df.columns: continue
+                    if not col_agency or col_agency not in df.columns: continue
+                    clean_codes = get_clean_series(df, col_code)
+                    m = df[clean_codes == safe_str(final_target_code)]
+                    if not m.empty:
+                        agency_val = str(m[col_agency].values[0]).strip()
+                        if agency_val and agency_val != 'nan':
+                            display_name = f"{agency_val} {user_name}"
+                        break
+                
                 # 🌟 [로그 저장] 일반 설계사 실적 조회 성공 시 기록 🌟
                 save_log(f"{user_name}({branch_code_input}지점)", final_target_code, "USER_SEARCH")
                 
-                render_ui_cards(user_name, calc_results, total_prize, show_share_text=False)
+                render_ui_cards(display_name, calc_results, total_prize, show_share_text=False)
                 
                 user_leaflet_path = os.path.join(DATA_DIR, "leaflet.png")
                 if os.path.exists(user_leaflet_path):
