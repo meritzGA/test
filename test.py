@@ -335,6 +335,7 @@ def calculate_agent_performance(target_code):
         
         if cat == 'weekly':
             if "1기간" in p_type: 
+                if not prize_details: continue  # 미대상 → 항목 자체 미표시
                 raw_prev = match_df[cfg['col_val_prev']].values[0] if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
                 raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
                 val_prev = safe_float(raw_prev)
@@ -375,6 +376,7 @@ def calculate_agent_performance(target_code):
                 })
 
             else: 
+                if not prize_details: continue  # 미대상 → 항목 자체 미표시
                 raw_val = match_df[cfg['col_val']].values[0] if cfg.get('col_val') and cfg['col_val'] in df.columns else 0
                 val = safe_float(raw_val)
                 
@@ -384,6 +386,7 @@ def calculate_agent_performance(target_code):
                 })
         
         elif cat == 'cumulative':
+            if not prize_details: continue  # 미대상 → 항목 자체 미표시
             col_val = cfg.get('col_val', '')
             raw_val = match_df[col_val].values[0] if col_val and col_val in match_df.columns else 0
             val = safe_float(raw_val)
