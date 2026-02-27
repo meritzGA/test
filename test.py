@@ -280,20 +280,28 @@ st.markdown("""
 # ⚙️ 공통 함수 (데이터 계산)
 # ==========================================
 def _read_prize_items(cfg, match_df):
-    """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환. 공란은 제외."""
+    """설정에서 시상금 항목들을 읽어 [{label, amount, eligible}] 리스트 반환.
+    대상(col_eligible)=300이면 시상금 포함, 100이면 제외. 공란이면 무조건 포함."""
     prize_details = []
-    # 신규 형식: prize_items 리스트
     items = cfg.get('prize_items', [])
     if items:
         for item in items:
-            col = item.get('col', '')
+            col_prize = item.get('col_prize', '') or item.get('col', '')  # 구형 호환
             label = item.get('label', '')
-            if not col or col not in match_df.columns:
+            if not col_prize or col_prize not in match_df.columns:
                 continue
-            raw = match_df[col].values[0]
+            
+            # 대상 여부 확인
+            col_elig = item.get('col_eligible', '')
+            if col_elig and col_elig in match_df.columns:
+                elig_val = safe_float(match_df[col_elig].values[0])
+                if elig_val != 300:
+                    # 미대상 (100 등) → 이 항목 건너뜀
+                    continue
+            
+            raw = match_df[col_prize].values[0]
             amt = safe_float(raw)
-            if amt != 0:
-                prize_details.append({"label": label or col, "amount": amt})
+            prize_details.append({"label": label or col_prize, "amount": amt})
     else:
         # 구형 호환: col_prize 단일 컬럼
         col_prize = cfg.get('col_prize', '')
@@ -861,7 +869,7 @@ elif mode == "⚙️ 시스템 관리자":
                     "desc": "", "category": "weekly", "type": "구간 시책", 
                     "file": first_file, "col_name": "", "col_code": "", "col_branch": "", "col_manager_code": "",
                     "col_val": "", "col_val_prev": "", "col_val_curr": "",
-                    "prize_items": [{"label": "시상금", "col": ""}],
+                    "prize_items": [{"label": "시상금", "col_eligible": "", "col_prize": ""}],
                     "curr_req": 100000.0,
                     "tiers": [(500000, 300), (300000, 200), (200000, 200), (100000, 100)]
                 })
@@ -939,33 +947,47 @@ elif mode == "⚙️ 시스템 관리자":
                 st.caption("💡 브릿지 2기간은 (확보구간 + 차월가동금액) × 지급률로 계산됩니다.")
             else:
                 # 🌟 구간/브릿지1: 시상금 다중 항목 직접 읽기
-                st.markdown("**💰 시상금 컬럼 (여러 개 가능)**")
+                st.markdown("**💰 시상금 항목 (여러 개 가능)**")
+                st.caption("대상 컬럼: 300=대상, 100=미대상. 공란이면 무조건 대상 처리.")
                 if 'prize_items' not in cfg:
-                    old_col = cfg.pop('col_prize', '')
-                    cfg['prize_items'] = [{"label": "시상금", "col": old_col}] if old_col else [{"label": "시상금", "col": ""}]
+                    old_col = cfg.pop('col_prize', '') or cfg.pop('col', '')
+                    cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
+                # 구형 호환: col → col_prize
+                for _pi in cfg.get('prize_items', []):
+                    if 'col' in _pi and 'col_prize' not in _pi:
+                        _pi['col_prize'] = _pi.pop('col', '')
+                    if 'col_eligible' not in _pi:
+                        _pi['col_eligible'] = ''
                 
-                cols_with_blank = ["(공란 - 미반영)"] + cols
+                cols_with_blank = ["(공란)"] + cols
                 updated_items = []
                 for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
-                    pc1, pc2, pc3 = st.columns([3, 5, 2])
+                    st.markdown(f"<div style='background:#f8f9fa;padding:6px 8px;border-radius:6px;margin:4px 0;'>", unsafe_allow_html=True)
+                    pc1, pc4 = st.columns([8, 2])
                     with pc1:
-                        pi['label'] = st.text_input("표시명", value=pi.get('label', ''), key=f"pilbl_{i}_{pi_idx}", label_visibility="collapsed", placeholder="시상명")
-                    with pc2:
-                        cur_col = pi.get('col', '')
-                        sel_idx = cols_with_blank.index(cur_col) if cur_col in cols_with_blank else 0
-                        sel = st.selectbox("컬럼", cols_with_blank, index=sel_idx, key=f"picol_{i}_{pi_idx}", label_visibility="collapsed")
-                        pi['col'] = sel if sel != "(공란 - 미반영)" else ""
-                    with pc3:
+                        pi['label'] = st.text_input("시상명", value=pi.get('label', ''), key=f"pilbl_{i}_{pi_idx}", placeholder="시상 항목명")
+                    with pc4:
                         if st.button("🗑️", key=f"pidel_{i}_{pi_idx}", use_container_width=True):
+                            st.markdown("</div>", unsafe_allow_html=True)
                             continue
+                    pc2, pc3 = st.columns(2)
+                    with pc2:
+                        cur_elig = pi.get('col_eligible', '')
+                        elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
+                        sel_elig = st.selectbox("대상 컬럼 (300/100)", cols_with_blank, index=elig_idx, key=f"pielig_{i}_{pi_idx}")
+                        pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
+                    with pc3:
+                        cur_prize = pi.get('col_prize', '')
+                        prize_idx = cols_with_blank.index(cur_prize) if cur_prize in cols_with_blank else 0
+                        sel_prize = st.selectbox("예정시상금 컬럼", cols_with_blank, index=prize_idx, key=f"piprz_{i}_{pi_idx}")
+                        pi['col_prize'] = sel_prize if sel_prize != "(공란)" else ""
+                    st.markdown("</div>", unsafe_allow_html=True)
                     updated_items.append(pi)
                 cfg['prize_items'] = updated_items
                 
                 if st.button("➕ 시상금 항목 추가", key=f"piadd_{i}", use_container_width=True):
-                    cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col": ""})
+                    cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col_eligible": "", "col_prize": ""})
                     st.rerun()
-                
-                st.caption("공란으로 두면 해당 항목은 반영하지 않습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------------------------------------------------------
@@ -983,7 +1005,7 @@ elif mode == "⚙️ 시스템 관리자":
                 "name": f"신규 누계 항목 {len(st.session_state['config'])+1}",
                 "desc": "", "category": "cumulative", "type": "누계", 
                 "file": first_file, "col_code": "", "col_val": "",
-                "prize_items": [{"label": "시상금", "col": ""}]
+                "prize_items": [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
             })
             st.rerun()
 
@@ -1013,34 +1035,47 @@ elif mode == "⚙️ 시스템 관리자":
             cfg['col_val'] = st.selectbox("누계 실적 컬럼 (선택사항)", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
 
         with col2:
-            st.markdown("**💰 시상금 컬럼 (여러 개 가능)**")
-            # 구형 호환: col_prize → prize_items 변환
+            st.markdown("**💰 시상금 항목 (여러 개 가능)**")
+            st.caption("대상 컬럼: 300=대상, 100=미대상. 공란이면 무조건 대상 처리.")
+            # 구형 호환
             if 'prize_items' not in cfg:
                 old_col = cfg.pop('col_prize', '')
-                cfg['prize_items'] = [{"label": "시상금", "col": old_col}] if old_col else [{"label": "시상금", "col": ""}]
+                cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
+            for _pi in cfg.get('prize_items', []):
+                if 'col' in _pi and 'col_prize' not in _pi:
+                    _pi['col_prize'] = _pi.pop('col', '')
+                if 'col_eligible' not in _pi:
+                    _pi['col_eligible'] = ''
             
-            cols_with_blank = ["(공란 - 미반영)"] + cols
+            cols_with_blank = ["(공란)"] + cols
             updated_items = []
             for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
-                pc1, pc2, pc3 = st.columns([3, 5, 2])
+                st.markdown(f"<div style='background:#f0f4ff;padding:6px 8px;border-radius:6px;margin:4px 0;'>", unsafe_allow_html=True)
+                pc1, pc4 = st.columns([8, 2])
                 with pc1:
-                    pi['label'] = st.text_input("표시명", value=pi.get('label', ''), key=f"cpilbl_{i}_{pi_idx}", label_visibility="collapsed", placeholder="시상명")
-                with pc2:
-                    cur_col = pi.get('col', '')
-                    sel_idx = cols_with_blank.index(cur_col) if cur_col in cols_with_blank else 0
-                    sel = st.selectbox("컬럼", cols_with_blank, index=sel_idx, key=f"cpicol_{i}_{pi_idx}", label_visibility="collapsed")
-                    pi['col'] = sel if sel != "(공란 - 미반영)" else ""
-                with pc3:
+                    pi['label'] = st.text_input("시상명", value=pi.get('label', ''), key=f"cpilbl_{i}_{pi_idx}", placeholder="시상 항목명")
+                with pc4:
                     if st.button("🗑️", key=f"cpidel_{i}_{pi_idx}", use_container_width=True):
+                        st.markdown("</div>", unsafe_allow_html=True)
                         continue
+                pc2, pc3 = st.columns(2)
+                with pc2:
+                    cur_elig = pi.get('col_eligible', '')
+                    elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
+                    sel_elig = st.selectbox("대상 컬럼 (300/100)", cols_with_blank, index=elig_idx, key=f"cpielig_{i}_{pi_idx}")
+                    pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
+                with pc3:
+                    cur_prize = pi.get('col_prize', '')
+                    prize_idx = cols_with_blank.index(cur_prize) if cur_prize in cols_with_blank else 0
+                    sel_prize = st.selectbox("예정시상금 컬럼", cols_with_blank, index=prize_idx, key=f"cpiprz_{i}_{pi_idx}")
+                    pi['col_prize'] = sel_prize if sel_prize != "(공란)" else ""
+                st.markdown("</div>", unsafe_allow_html=True)
                 updated_items.append(pi)
             cfg['prize_items'] = updated_items
             
             if st.button("➕ 시상금 항목 추가", key=f"cpiadd_{i}", use_container_width=True):
-                cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col": ""})
+                cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col_eligible": "", "col_prize": ""})
                 st.rerun()
-            
-            st.caption("공란으로 두면 해당 항목은 반영하지 않습니다.")
             
         st.markdown("</div>", unsafe_allow_html=True)
 
