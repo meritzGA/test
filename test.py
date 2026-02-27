@@ -281,7 +281,7 @@ st.markdown("""
 # ==========================================
 def _read_prize_items(cfg, match_df):
     """설정에서 시상금 항목들을 읽어 [{label, amount, eligible}] 리스트 반환.
-    대상(col_eligible)=300이면 시상금 포함, 100이면 제외. 공란이면 무조건 포함."""
+    지급률(col_eligible)=0이면 미대상으로 제외, 그 외 값이면 대상으로 포함. 공란이면 무조건 포함."""
     prize_details = []
     items = cfg.get('prize_items', [])
     if items:
@@ -295,7 +295,7 @@ def _read_prize_items(cfg, match_df):
             col_elig = item.get('col_eligible', '')
             if col_elig and col_elig in match_df.columns:
                 elig_val = safe_float(match_df[col_elig].values[0])
-                if elig_val != 300:
+                if elig_val == 0:
                     # 미대상 (100 등) → 이 항목 건너뜀
                     continue
             
@@ -951,7 +951,7 @@ elif mode == "⚙️ 시스템 관리자":
             else:
                 # 🌟 구간/브릿지1: 시상금 다중 항목 직접 읽기
                 st.markdown("**💰 시상금 항목 (여러 개 가능)**")
-                st.caption("대상 컬럼: 300=대상, 100=미대상. 공란이면 무조건 대상 처리.")
+                st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
                 if 'prize_items' not in cfg:
                     old_col = cfg.pop('col_prize', '') or cfg.pop('col', '')
                     cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
@@ -977,7 +977,7 @@ elif mode == "⚙️ 시스템 관리자":
                     with pc2:
                         cur_elig = pi.get('col_eligible', '')
                         elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
-                        sel_elig = st.selectbox("대상 컬럼 (300/100)", cols_with_blank, index=elig_idx, key=f"pielig_{i}_{pi_idx}")
+                        sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_with_blank, index=elig_idx, key=f"pielig_{i}_{pi_idx}")
                         pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
                     with pc3:
                         cur_prize = pi.get('col_prize', '')
@@ -1039,7 +1039,7 @@ elif mode == "⚙️ 시스템 관리자":
 
         with col2:
             st.markdown("**💰 시상금 항목 (여러 개 가능)**")
-            st.caption("대상 컬럼: 300=대상, 100=미대상. 공란이면 무조건 대상 처리.")
+            st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
             # 구형 호환
             if 'prize_items' not in cfg:
                 old_col = cfg.pop('col_prize', '')
@@ -1065,7 +1065,7 @@ elif mode == "⚙️ 시스템 관리자":
                 with pc2:
                     cur_elig = pi.get('col_eligible', '')
                     elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
-                    sel_elig = st.selectbox("대상 컬럼 (300/100)", cols_with_blank, index=elig_idx, key=f"cpielig_{i}_{pi_idx}")
+                    sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_with_blank, index=elig_idx, key=f"cpielig_{i}_{pi_idx}")
                     pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
                 with pc3:
                     cur_prize = pi.get('col_prize', '')
