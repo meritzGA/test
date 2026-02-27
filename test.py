@@ -279,6 +279,31 @@ st.markdown("""
 # ==========================================
 # ⚙️ 공통 함수 (데이터 계산)
 # ==========================================
+def _read_prize_items(cfg, match_df):
+    """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환. 공란은 제외."""
+    prize_details = []
+    # 신규 형식: prize_items 리스트
+    items = cfg.get('prize_items', [])
+    if items:
+        for item in items:
+            col = item.get('col', '')
+            label = item.get('label', '')
+            if not col or col not in match_df.columns:
+                continue
+            raw = match_df[col].values[0]
+            amt = safe_float(raw)
+            if amt != 0:
+                prize_details.append({"label": label or col, "amount": amt})
+    else:
+        # 구형 호환: col_prize 단일 컬럼
+        col_prize = cfg.get('col_prize', '')
+        if col_prize and col_prize in match_df.columns:
+            raw = match_df[col_prize].values[0]
+            amt = safe_float(raw)
+            if amt != 0:
+                prize_details.append({"label": "시상금", "amount": amt})
+    return prize_details
+
 def calculate_agent_performance(target_code):
     calculated_results = []
     
@@ -296,10 +321,9 @@ def calculate_agent_performance(target_code):
         cat = cfg.get('category', 'weekly')
         p_type = cfg.get('type', '구간 시책')
         
-        # 🌟 시상금 컬럼에서 직접 읽기 (계산 없음)
-        col_prize = cfg.get('col_prize', '')
-        raw_prize = match_df[col_prize].values[0] if col_prize and col_prize in match_df.columns else 0
-        prize = safe_float(raw_prize)
+        # 🌟 시상금 여러 항목 읽기
+        prize_details = _read_prize_items(cfg, match_df)
+        prize = sum(d['amount'] for d in prize_details)
         
         if cat == 'weekly':
             if "1기간" in p_type: 
@@ -310,7 +334,7 @@ def calculate_agent_performance(target_code):
                 
                 calculated_results.append({
                     "name": cfg['name'], "desc": cfg.get('desc', ''), "category": "weekly", "type": "브릿지1",
-                    "val_prev": val_prev, "val_curr": val_curr, "prize": prize
+                    "val_prev": val_prev, "val_curr": val_curr, "prize": prize, "prize_details": prize_details
                 })
                 
             elif "2기간" in p_type:
@@ -319,7 +343,7 @@ def calculate_agent_performance(target_code):
                 
                 calculated_results.append({
                     "name": cfg['name'], "desc": cfg.get('desc', ''), "category": "weekly", "type": "브릿지2",
-                    "val": val_curr, "prize": prize
+                    "val": val_curr, "prize": prize, "prize_details": prize_details
                 })
 
             else: 
@@ -328,7 +352,7 @@ def calculate_agent_performance(target_code):
                 
                 calculated_results.append({
                     "name": cfg['name'], "desc": cfg.get('desc', ''), "category": "weekly", "type": "구간",
-                    "val": val, "prize": prize
+                    "val": val, "prize": prize, "prize_details": prize_details
                 })
         
         elif cat == 'cumulative':
@@ -338,7 +362,7 @@ def calculate_agent_performance(target_code):
             
             calculated_results.append({
                 "name": cfg['name'], "desc": cfg.get('desc', ''), "category": "cumulative", "type": "누계",
-                "val": val, "prize": prize
+                "val": val, "prize": prize, "prize_details": prize_details
             })
             
     total_prize_sum = sum(r['prize'] for r in calculated_results)
@@ -375,6 +399,14 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
         
         for res in weekly_res:
             desc_html = res['desc'].replace('\n', '<br>') if res.get('desc') else ''
+            details = res.get('prize_details', [])
+            
+            # 시상금 상세 HTML 생성
+            prize_detail_html = ""
+            if len(details) > 1:
+                for d in details:
+                    prize_detail_html += f"<div class='data-row'><span class='data-label'>{d['label']}</span><span class='data-value' style='color:rgb(128,0,0);'>{d['amount']:,.0f}원</span></div>"
+                prize_detail_html += "<div class='toss-divider'></div>"
             
             if res['type'] == "구간":
                 card_html = (
@@ -383,10 +415,13 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                     f"<div class='toss-desc'>{desc_html}</div>"
                     f"<div class='data-row'><span class='data-label'>현재 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div>"
                     f"<div class='toss-divider'></div>"
+                    f"{prize_detail_html}"
                     f"<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
                     f"</div>"
                 )
                 share_text += f"\n[{res['name']}]\n- 현재실적: {res['val']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
+                for d in details:
+                    share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
             
             elif res['type'] == "브릿지1":
                 card_html = (
@@ -396,10 +431,13 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                     f"<div class='data-row'><span class='data-label'>전월 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div>"
                     f"<div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div>"
                     f"<div class='toss-divider'></div>"
+                    f"{prize_detail_html}"
                     f"<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
                     f"</div>"
                 )
                 share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원\n- 당월실적: {res['val_curr']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
+                for d in details:
+                    share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
                 
             elif res['type'] == "브릿지2":
                 card_html = (
@@ -408,10 +446,13 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                     f"<div class='toss-desc'>{desc_html}</div>"
                     f"<div class='data-row'><span class='data-label'>당월 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div>"
                     f"<div class='toss-divider'></div>"
+                    f"{prize_detail_html}"
                     f"<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
                     f"</div>"
                 )
                 share_text += f"\n[{res['name']}]\n- 당월실적: {res['val']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
+                for d in details:
+                    share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
                 
             st.markdown(card_html, unsafe_allow_html=True)
 
@@ -434,11 +475,18 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
         
         stack_html = ""
         for res in cumul_res:
+            details = res.get('prize_details', [])
+            detail_lines = ""
+            if len(details) > 1:
+                for d in details:
+                    detail_lines += f"<span class='cumul-stack-val'>{d['label']}: {d['amount']:,.0f}원</span>"
+            else:
+                detail_lines = f"<span class='cumul-stack-val'>누계실적: {res['val']:,.0f}원</span>"
             stack_html += (
                 f"<div class='cumul-stack-box'>"
                 f"<div class='cumul-stack-info'>"
                 f"<span class='cumul-stack-title'>{res['name']}</span>"
-                f"<span class='cumul-stack-val'>누계실적: {res['val']:,.0f}원</span>"
+                f"{detail_lines}"
                 f"</div>"
                 f"<div class='cumul-stack-prize'>{res['prize']:,.0f}원</div>"
                 f"</div>"
@@ -784,7 +832,8 @@ elif mode == "⚙️ 시스템 관리자":
                     "name": f"신규 주차 시책 {len(st.session_state['config'])+1}",
                     "desc": "", "category": "weekly", "type": "구간 시책", 
                     "file": first_file, "col_name": "", "col_code": "", "col_branch": "", "col_manager_code": "",
-                    "col_val": "", "col_val_prev": "", "col_val_curr": "", "col_prize": ""
+                    "col_val": "", "col_val_prev": "", "col_val_curr": "",
+                    "prize_items": [{"label": "시상금", "col": ""}]
                 })
                 st.rerun()
                 
@@ -842,9 +891,35 @@ elif mode == "⚙️ 시스템 관리자":
             else: 
                 cfg['col_val'] = st.selectbox("실적 수치 컬럼", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
             
-            cfg['col_prize'] = st.selectbox("💰 시상금 컬럼 (필수)", cols, index=get_idx(cfg.get('col_prize', ''), cols), key=f"cprize_{i}")
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.success("✅ 구간/지급률 계산 없이, 지정한 파일에서 **실적**과 **시상금**을 직접 가져옵니다.")
+            # 🌟 시상금 다중 항목 설정
+            st.markdown("**💰 시상금 컬럼 (여러 개 가능)**")
+            # 구형 호환: col_prize → prize_items 변환
+            if 'prize_items' not in cfg:
+                old_col = cfg.pop('col_prize', '')
+                cfg['prize_items'] = [{"label": "시상금", "col": old_col}] if old_col else [{"label": "시상금", "col": ""}]
+            
+            cols_with_blank = ["(공란 - 미반영)"] + cols
+            updated_items = []
+            for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
+                pc1, pc2, pc3 = st.columns([3, 5, 2])
+                with pc1:
+                    pi['label'] = st.text_input("표시명", value=pi.get('label', ''), key=f"pilbl_{i}_{pi_idx}", label_visibility="collapsed", placeholder="시상명")
+                with pc2:
+                    cur_col = pi.get('col', '')
+                    sel_idx = cols_with_blank.index(cur_col) if cur_col in cols_with_blank else 0
+                    sel = st.selectbox("컬럼", cols_with_blank, index=sel_idx, key=f"picol_{i}_{pi_idx}", label_visibility="collapsed")
+                    pi['col'] = sel if sel != "(공란 - 미반영)" else ""
+                with pc3:
+                    if st.button("🗑️", key=f"pidel_{i}_{pi_idx}", use_container_width=True):
+                        continue  # skip this item (delete)
+                updated_items.append(pi)
+            cfg['prize_items'] = updated_items
+            
+            if st.button("➕ 시상금 항목 추가", key=f"piadd_{i}", use_container_width=True):
+                cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col": ""})
+                st.rerun()
+            
+            st.caption("공란으로 두면 해당 항목은 반영하지 않습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------------------------------------------------------
@@ -861,7 +936,8 @@ elif mode == "⚙️ 시스템 관리자":
             st.session_state['config'].append({
                 "name": f"신규 누계 항목 {len(st.session_state['config'])+1}",
                 "desc": "", "category": "cumulative", "type": "누계", 
-                "file": first_file, "col_code": "", "col_val": "", "col_prize": ""
+                "file": first_file, "col_code": "", "col_val": "",
+                "prize_items": [{"label": "시상금", "col": ""}]
             })
             st.rerun()
 
@@ -888,12 +964,37 @@ elif mode == "⚙️ 시스템 관리자":
             def get_idx(val, opts): return opts.index(val) if val in opts else 0
 
             cfg['col_code'] = st.selectbox("설계사코드(사번) 컬럼", cols, index=get_idx(cfg.get('col_code', ''), cols), key=f"ccode_{i}")
-            cfg['col_val'] = st.selectbox("누계 실적 컬럼 (선택사항, 없으면 공란)", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
-            cfg['col_prize'] = st.selectbox("확정 시상금 컬럼 (필수)", cols, index=get_idx(cfg.get('col_prize', ''), cols), key=f"cprize_{i}")
+            cfg['col_val'] = st.selectbox("누계 실적 컬럼 (선택사항)", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
 
         with col2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            st.info("✅ **구간 설정이 필요 없습니다.**\n\n지정한 파일에서 사번이 일치하는 사람의 **[누계 실적]**과 **[확정 시상금]**을 그대로 가져와 화면의 파란색 박스에 보여줍니다.")
+            st.markdown("**💰 시상금 컬럼 (여러 개 가능)**")
+            # 구형 호환: col_prize → prize_items 변환
+            if 'prize_items' not in cfg:
+                old_col = cfg.pop('col_prize', '')
+                cfg['prize_items'] = [{"label": "시상금", "col": old_col}] if old_col else [{"label": "시상금", "col": ""}]
+            
+            cols_with_blank = ["(공란 - 미반영)"] + cols
+            updated_items = []
+            for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
+                pc1, pc2, pc3 = st.columns([3, 5, 2])
+                with pc1:
+                    pi['label'] = st.text_input("표시명", value=pi.get('label', ''), key=f"cpilbl_{i}_{pi_idx}", label_visibility="collapsed", placeholder="시상명")
+                with pc2:
+                    cur_col = pi.get('col', '')
+                    sel_idx = cols_with_blank.index(cur_col) if cur_col in cols_with_blank else 0
+                    sel = st.selectbox("컬럼", cols_with_blank, index=sel_idx, key=f"cpicol_{i}_{pi_idx}", label_visibility="collapsed")
+                    pi['col'] = sel if sel != "(공란 - 미반영)" else ""
+                with pc3:
+                    if st.button("🗑️", key=f"cpidel_{i}_{pi_idx}", use_container_width=True):
+                        continue
+                updated_items.append(pi)
+            cfg['prize_items'] = updated_items
+            
+            if st.button("➕ 시상금 항목 추가", key=f"cpiadd_{i}", use_container_width=True):
+                cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col": ""})
+                st.rerun()
+            
+            st.caption("공란으로 두면 해당 항목은 반영하지 않습니다.")
             
         st.markdown("</div>", unsafe_allow_html=True)
 
