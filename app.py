@@ -243,6 +243,7 @@ def load_cfg():
               'cust_name_col_a','cust_name_col_b','cust_code_col_a','cust_code_col_b','cust_branch_col_a','cust_branch_col_b']:
         st.session_state[k]=str(cfg.get(k,""))
     st.session_state['display_cols']=cfg.get('display_cols',[]) if isinstance(cfg.get('display_cols'),list) else []
+    st.session_state['display_labels']=cfg.get('display_labels',{}) if isinstance(cfg.get('display_labels'),dict) else {}
     st.session_state['prize_config']=cfg.get('prize_config',[]) if isinstance(cfg.get('prize_config'),list) else []
     if os.path.exists(DATA_FILE):
         try:
@@ -255,7 +256,7 @@ def load_cfg():
 def save_cfg():
     cfg={}
     for k in ['file_a_name','file_b_name','join_col_a','join_col_b','manager_col','manager_col2','manager_name_col',
-              'cust_name_col_a','cust_name_col_b','cust_code_col_a','cust_code_col_b','cust_branch_col_a','cust_branch_col_b','display_cols','prize_config']:
+              'cust_name_col_a','cust_name_col_b','cust_code_col_a','cust_code_col_b','cust_branch_col_a','cust_branch_col_b','display_cols','display_labels','prize_config']:
         cfg[k]=st.session_state.get(k,"")
     try:
         if os.path.exists(CONFIG_FILE): shutil.copy2(CONFIG_FILE,CONFIG_FILE+".bak")
@@ -529,6 +530,15 @@ if menu=="⚙️ 관리자 설정":
         with b2c: cbb=st.selectbox("지사(B)",opts,index=si('cust_branch_col_b',['대리점지사명'],opts),key="cbb")
         st.markdown("---"); st.markdown("### 📋 실적 표시")
         prev=st.session_state.get('display_cols',[]); dc=st.multiselect("항목",av,default=[c for c in prev if c in av],key="cdc")
+        # 별도 명칭 부여
+        prev_labels=st.session_state.get('display_labels',{})
+        dc_labels={}
+        if dc:
+            st.markdown("**표시 명칭** (비워두면 원래 열 이름 사용)")
+            for ci,col in enumerate(dc):
+                default_lbl=prev_labels.get(col,'')
+                lbl=st.text_input(f"'{col}' 표시명",value=default_lbl,placeholder=col,key=f"dlbl_{ci}")
+                dc_labels[col]=lbl.strip() if lbl.strip() else col
         st.markdown("---"); st.markdown("### 🏆 시상 JSON")
         pc=st.session_state.get('prize_config',[])
         if pc: st.success(f"✅ {len(pc)}개 시책")
@@ -545,7 +555,7 @@ if menu=="⚙️ 관리자 설정":
             st.session_state['manager_name_col']=mn_col
             for k,v in [('cust_name_col_a',cna),('cust_name_col_b',cnb),('cust_code_col_a',cca),('cust_code_col_b',ccb),('cust_branch_col_a',cba),('cust_branch_col_b',cbb)]:
                 st.session_state[k]=v if v!="(없음)" else ""
-            st.session_state['display_cols']=dc; save_cfg(); st.success("✅"); st.rerun()
+            st.session_state['display_cols']=dc; st.session_state['display_labels']=dc_labels; save_cfg(); st.success("✅"); st.rerun()
 
 # =============================================================
 # 9. 매니저
@@ -560,7 +570,7 @@ elif menu=="📱 매니저 화면":
     _cna=st.session_state.get('cust_name_col_a',''); _cnb=st.session_state.get('cust_name_col_b','')
     _cca=st.session_state.get('cust_code_col_a',''); _ccb=st.session_state.get('cust_code_col_b','')
     _cba=st.session_state.get('cust_branch_col_a',''); _cbb=st.session_state.get('cust_branch_col_b','')
-    dcfg=st.session_state.get('display_cols',[]); pcfg=st.session_state.get('prize_config',[])
+    dcfg=st.session_state.get('display_cols',[]); pcfg=st.session_state.get('prize_config',[]); dlbl=st.session_state.get('display_labels',{})
 
     if not st.session_state.get('mgr_in'):
         st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 로그인</h1><p class='hero-sub'>코드와 비밀번호를 입력하세요</p></div>",unsafe_allow_html=True)
@@ -635,7 +645,8 @@ elif menu=="📱 매니저 화면":
                         if isinstance(val,(int,float,np.integer,np.floating)) and not pd.isna(val): dv=fmt_num(val)
                         if dv:
                             pcls='r' if ci%2==0 else 'g'
-                            pills_h+=f"<span class='lc-pill {pcls}'><span class='pl-lbl'>{col}</span><span class='pl-val'>{dv}</span></span>"
+                            lbl=dlbl.get(col,col)
+                            pills_h+=f"<span class='lc-pill {pcls}'><span class='pl-lbl'>{lbl}</span><span class='pl-val'>{dv}</span></span>"
                 # 발송 dots
                 dots_h=""
                 for mt_id,mt_lbl in dot_labels.items():
@@ -737,8 +748,9 @@ elif menu=="📱 매니저 화면":
                             if dv and dv not in ('0','0.0'):
                                 if isinstance(val,(int,float)) and not pd.isna(val): dv=fmt_num(val)
                                 if dv:
-                                    pfx="  🔴 " if '부족' in col else ("  🎯 " if '목표' in col else "  ")
-                                    lines.append(f"{pfx}{col}: {dv}")
+                                    lbl=dlbl.get(col,col)
+                                    pfx="  🔴 " if '부족' in col or '부족' in lbl else ("  🎯 " if '목표' in col or '목표' in lbl else "  ")
+                                    lines.append(f"{pfx}{lbl}: {dv}")
                         lines.append("")
                     if pcfg:
                         prs=calc_prize(crow,pcfg); weekly=[p for p in prs if p.get('category')=='weekly']; cumul=[p for p in prs if p.get('category')=='cumulative']
