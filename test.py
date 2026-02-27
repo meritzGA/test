@@ -18,6 +18,12 @@ if not os.path.exists(DATA_DIR):
 # --- 🔒 추가 기능: 접속 로그 저장 함수 ---
 LOG_FILE = os.path.join(DATA_DIR, "access_log.csv")
 
+import re as _re
+def _clean_excel_text(s):
+    """엑셀 _xHHHH_ 이스케이프 시퀀스를 원래 유니코드 문자로 복원"""
+    if not s or not isinstance(s, str): return s
+    return _re.sub(r'_x([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
+
 def save_log(user_name, user_code, action_type):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_data = pd.DataFrame([[now, user_name, user_code, action_type]], 
@@ -61,7 +67,11 @@ if 'raw_data' not in st.session_state:
     st.session_state['raw_data'] = {}
     for file in os.listdir(DATA_DIR):
         if file.endswith('.pkl'):
-            st.session_state['raw_data'][file.replace('.pkl', '')] = pd.read_pickle(os.path.join(DATA_DIR, file))
+            df = pd.read_pickle(os.path.join(DATA_DIR, file))
+            df.columns = [_clean_excel_text(str(c)) for c in df.columns]
+            for col in df.select_dtypes(include='object').columns:
+                df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
+            st.session_state['raw_data'][file.replace('.pkl', '')] = df
 
 if 'config' not in st.session_state:
     config_path = os.path.join(DATA_DIR, 'config.json')
@@ -718,8 +728,8 @@ if mode == "👥 매니저 관리":
                                     agent_name = safe_str(match_df[cfg['col_name']].values[0])
                                 br = cfg.get('col_branch','')
                                 ag = cfg.get('col_agency','')
-                                if ag and ag in df.columns: agent_agency = safe_str(match_df[ag].values[0])
-                                elif br and br in df.columns: agent_agency = safe_str(match_df[br].values[0])
+                                if ag and ag in df.columns: agent_agency = _clean_excel_text(safe_str(match_df[ag].values[0]))
+                                elif br and br in df.columns: agent_agency = _clean_excel_text(safe_str(match_df[br].values[0]))
                                 break
 
                 for res in calc_results:
@@ -821,6 +831,11 @@ elif mode == "⚙️ 시스템 관리자":
                                 file.seek(0)
                                 df = pd.read_csv(file, sep='\t', encoding='cp949')
                 else: df = pd.read_excel(file)
+                
+                # 🌟 엑셀 _xHHHH_ 이스케이프 일괄 정리
+                df.columns = [_clean_excel_text(str(c)) for c in df.columns]
+                for col in df.select_dtypes(include='object').columns:
+                    df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
                 
                 st.session_state['raw_data'][file.name] = df
                 df.to_pickle(os.path.join(DATA_DIR, f"{file.name}.pkl"))
@@ -1262,7 +1277,7 @@ else:
                     clean_codes = get_clean_series(df, col_code)
                     m = df[clean_codes == safe_str(final_target_code)]
                     if not m.empty:
-                        agency_val = str(m[col_agency].values[0]).strip()
+                        agency_val = _clean_excel_text(str(m[col_agency].values[0]).strip())
                         if agency_val and agency_val != 'nan':
                             display_name = f"{agency_val} {user_name}"
                         break
