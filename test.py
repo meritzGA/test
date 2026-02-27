@@ -341,9 +341,29 @@ def calculate_agent_performance(target_code):
                 raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
                 val_curr = safe_float(raw_curr)
                 
+                curr_req = float(cfg.get('curr_req', 100000.0))
+                calc_rate, tier_achieved, prize = 0, 0, 0
+                
+                for amt, rate in cfg.get('tiers', []):
+                    if val_curr >= amt:
+                        tier_achieved = amt
+                        calc_rate = rate
+                        break
+                        
+                if tier_achieved > 0:
+                    prize = (tier_achieved + curr_req) * (calc_rate / 100)
+                    
+                next_tier = None
+                for amt, rate in reversed(cfg.get('tiers', [])):
+                    if val_curr < amt:
+                        next_tier = amt
+                        break
+                shortfall = next_tier - val_curr if next_tier else 0
+                
                 calculated_results.append({
                     "name": cfg['name'], "desc": cfg.get('desc', ''), "category": "weekly", "type": "브릿지2",
-                    "val": val_curr, "prize": prize, "prize_details": prize_details
+                    "val": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
+                    "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall
                 })
 
             else: 
@@ -391,8 +411,12 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
         share_text += f"📌 [진행 중인 시책]\n"
         
         for res in weekly_res:
-            summary_html += f"<div class='data-row' style='padding: 6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-            share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원\n"
+            if res['type'] == "브릿지2":
+                summary_html += f"<div class='data-row' style='padding: 6px 0; align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem; color:rgba(255,255,255,0.7);'>(다음 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
+            else:
+                summary_html += f"<div class='data-row' style='padding: 6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원\n"
                 
         summary_html += "</div>"
         st.markdown(summary_html, unsafe_allow_html=True)
@@ -440,19 +464,23 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                     share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
                 
             elif res['type'] == "브릿지2":
+                shortfall_html = ""
+                if res.get('shortfall', 0) > 0 and res.get('next_tier'):
+                    shortfall_html = f"<div class='shortfall-row'><span class='shortfall-text'>🚀 다음 {int(res['next_tier']//10000)}만 구간까지 {res['shortfall']:,.0f}원 남음!</span></div>"
                 card_html = (
                     f"<div class='toss-card'>"
                     f"<div class='toss-title'>{res['name']}</div>"
                     f"<div class='toss-desc'>{desc_html}</div>"
                     f"<div class='data-row'><span class='data-label'>당월 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div>"
+                    f"<div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div>"
+                    f"<div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div>"
+                    f"{shortfall_html}"
                     f"<div class='toss-divider'></div>"
-                    f"{prize_detail_html}"
-                    f"<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
+                    f"<div class='prize-row'><span class='prize-label'>다음 달 {int(res['curr_req']//10000)}만 가동 시<br>시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
                     f"</div>"
                 )
-                share_text += f"\n[{res['name']}]\n- 당월실적: {res['val']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
-                for d in details:
-                    share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
+                share_text += f"\n[{res['name']}]\n- 당월실적: {res['val']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (차월조건)\n"
+                if res.get('shortfall', 0) > 0: share_text += f"🚀 다음 {int(res['next_tier']//10000)}만 구간까지 {res['shortfall']:,.0f}원 남음!\n"
                 
             st.markdown(card_html, unsafe_allow_html=True)
 
@@ -833,7 +861,9 @@ elif mode == "⚙️ 시스템 관리자":
                     "desc": "", "category": "weekly", "type": "구간 시책", 
                     "file": first_file, "col_name": "", "col_code": "", "col_branch": "", "col_manager_code": "",
                     "col_val": "", "col_val_prev": "", "col_val_curr": "",
-                    "prize_items": [{"label": "시상금", "col": ""}]
+                    "prize_items": [{"label": "시상금", "col": ""}],
+                    "curr_req": 100000.0,
+                    "tiers": [(500000, 300), (300000, 200), (200000, 200), (100000, 100)]
                 })
                 st.rerun()
                 
@@ -891,35 +921,51 @@ elif mode == "⚙️ 시스템 관리자":
             else: 
                 cfg['col_val'] = st.selectbox("실적 수치 컬럼", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
             
-            # 🌟 시상금 다중 항목 설정
-            st.markdown("**💰 시상금 컬럼 (여러 개 가능)**")
-            # 구형 호환: col_prize → prize_items 변환
-            if 'prize_items' not in cfg:
-                old_col = cfg.pop('col_prize', '')
-                cfg['prize_items'] = [{"label": "시상금", "col": old_col}] if old_col else [{"label": "시상금", "col": ""}]
-            
-            cols_with_blank = ["(공란 - 미반영)"] + cols
-            updated_items = []
-            for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
-                pc1, pc2, pc3 = st.columns([3, 5, 2])
-                with pc1:
-                    pi['label'] = st.text_input("표시명", value=pi.get('label', ''), key=f"pilbl_{i}_{pi_idx}", label_visibility="collapsed", placeholder="시상명")
-                with pc2:
-                    cur_col = pi.get('col', '')
-                    sel_idx = cols_with_blank.index(cur_col) if cur_col in cols_with_blank else 0
-                    sel = st.selectbox("컬럼", cols_with_blank, index=sel_idx, key=f"picol_{i}_{pi_idx}", label_visibility="collapsed")
-                    pi['col'] = sel if sel != "(공란 - 미반영)" else ""
-                with pc3:
-                    if st.button("🗑️", key=f"pidel_{i}_{pi_idx}", use_container_width=True):
-                        continue  # skip this item (delete)
-                updated_items.append(pi)
-            cfg['prize_items'] = updated_items
-            
-            if st.button("➕ 시상금 항목 추가", key=f"piadd_{i}", use_container_width=True):
-                cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col": ""})
-                st.rerun()
-            
-            st.caption("공란으로 두면 해당 항목은 반영하지 않습니다.")
+            if "2기간" in cfg['type']:
+                # 🌟 브릿지2: 기존 구간/지급률 계산 유지
+                cfg['curr_req'] = st.number_input("차월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{i}")
+                st.write("📈 구간 설정 (달성금액, 지급률%)")
+                tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
+                tier_input = st.text_area("엔터로 줄바꿈", value=tier_str, height=150, key=f"tier_{i}")
+                try:
+                    new_tiers = []
+                    for line in tier_input.strip().split('\n'):
+                        if ',' in line:
+                            parts = line.split(',')
+                            new_tiers.append((float(parts[0].strip()), float(parts[1].strip())))
+                    cfg['tiers'] = sorted(new_tiers, key=lambda x: x[0], reverse=True)
+                except:
+                    st.error("형식이 올바르지 않습니다.")
+                st.caption("💡 브릿지 2기간은 (확보구간 + 차월가동금액) × 지급률로 계산됩니다.")
+            else:
+                # 🌟 구간/브릿지1: 시상금 다중 항목 직접 읽기
+                st.markdown("**💰 시상금 컬럼 (여러 개 가능)**")
+                if 'prize_items' not in cfg:
+                    old_col = cfg.pop('col_prize', '')
+                    cfg['prize_items'] = [{"label": "시상금", "col": old_col}] if old_col else [{"label": "시상금", "col": ""}]
+                
+                cols_with_blank = ["(공란 - 미반영)"] + cols
+                updated_items = []
+                for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
+                    pc1, pc2, pc3 = st.columns([3, 5, 2])
+                    with pc1:
+                        pi['label'] = st.text_input("표시명", value=pi.get('label', ''), key=f"pilbl_{i}_{pi_idx}", label_visibility="collapsed", placeholder="시상명")
+                    with pc2:
+                        cur_col = pi.get('col', '')
+                        sel_idx = cols_with_blank.index(cur_col) if cur_col in cols_with_blank else 0
+                        sel = st.selectbox("컬럼", cols_with_blank, index=sel_idx, key=f"picol_{i}_{pi_idx}", label_visibility="collapsed")
+                        pi['col'] = sel if sel != "(공란 - 미반영)" else ""
+                    with pc3:
+                        if st.button("🗑️", key=f"pidel_{i}_{pi_idx}", use_container_width=True):
+                            continue
+                    updated_items.append(pi)
+                cfg['prize_items'] = updated_items
+                
+                if st.button("➕ 시상금 항목 추가", key=f"piadd_{i}", use_container_width=True):
+                    cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col": ""})
+                    st.rerun()
+                
+                st.caption("공란으로 두면 해당 항목은 반영하지 않습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------------------------------------------------------
