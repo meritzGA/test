@@ -84,8 +84,15 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .info-badges .ib { padding:3px 10px; border-radius:6px; font-size:13px; font-weight:600; }
 .info-badges .ib.done { background:#00a85e; color:#fff; }
 .info-badges .ib.wait { background:#f2f4f6; color:#c4c9d0; }
-/* 탭 크기 */
-button[data-baseweb="tab"] { font-size:15px !important; font-weight:700 !important; padding:10px 16px !important; }
+/* 탭 컨테이너 */
+div[data-baseweb="tab-list"] { gap:6px !important; border-bottom:none !important; }
+/* 탭 버튼 */
+button[data-baseweb="tab"] { font-size:13px !important; font-weight:700 !important; padding:10px 12px !important; border-radius:10px !important; border:2px solid var(--border) !important; background:var(--card) !important; color:var(--text2) !important; transition:all .15s !important; }
+button[data-baseweb="tab"]:hover { border-color:rgba(var(--mr),0.3) !important; background:rgba(var(--mr),0.03) !important; }
+button[data-baseweb="tab"][aria-selected="true"] { background:rgb(var(--mr)) !important; color:#fff !important; border-color:rgb(var(--mr)) !important; }
+/* 탭 하단 인디케이터 숨김 */
+div[data-baseweb="tab-highlight"] { display:none !important; }
+div[data-baseweb="tab-border"] { display:none !important; }
 /* 선택된 카드 강조 */
 .lc.active { border-color:rgb(var(--mr)); border-width:2px; background:rgba(var(--mr),0.02); }
 /* 컴팩트 시상 라인 */
@@ -152,6 +159,7 @@ iframe { width:100% !important; }
 }
 @media (max-width:480px) {
     .hero-card { padding:14px 12px; border-radius:12px; } .hero-name { font-size:18px !important; }
+    button[data-baseweb="tab"] { font-size:12px !important; padding:8px 8px !important; }
 }
 </style>
 """, unsafe_allow_html=True)
