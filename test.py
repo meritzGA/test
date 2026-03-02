@@ -575,17 +575,16 @@ elif menu=="📱 매니저 화면":
     dcfg=st.session_state.get('display_cols',[]); pcfg=st.session_state.get('prize_config',[]); dlbl=st.session_state.get('display_labels',{})
 
     # ── 매니저 로그인 ──
-    def _try_login():
-        ci=st.session_state.get('_mlc',''); pi=st.session_state.get('_mlp','')
-        if pi!=MGR_PW: st.session_state['_mle']="❌ 비밀번호 오류"; return False
-        if not ci: st.session_state['_mle']="코드를 입력하세요"; return False
+    def _exec_login(code,pw):
+        if pw!=MGR_PW: return "❌ 비밀번호 오류"
+        if not code: return "코드를 입력하세요"
         _df=st.session_state['df_merged'].copy()
         _mc1=st.session_state['manager_col']; _mc2=st.session_state.get('manager_col2','')
         _mn_col=st.session_state.get('manager_name_col',_mc1)
-        cc=clean_key(ci); _df['_s1']=_df[_mc1].apply(clean_key); mask=_df['_s1']==cc
+        cc=clean_key(code); _df['_s1']=_df[_mc1].apply(clean_key); mask=_df['_s1']==cc
         if _mc2 and _mc2 in _df.columns: _df['_s2']=_df[_mc2].apply(clean_key); mask=mask|(_df['_s2']==cc)
         found=_df[mask]
-        if found.empty: st.session_state['_mle']=f"❌ '{ci}' 없음"; return False
+        if found.empty: return f"❌ '{code}' 없음"
         mn="매니저"
         if _mn_col in found.columns:
             ns=found[_mn_col].dropna(); ns=ns[ns.astype(str).str.strip()!='']
@@ -593,20 +592,34 @@ elif menu=="📱 매니저 화면":
                 n=safe_str(ns.iloc[0])
                 if n: mn=n
         st.session_state['mgr_in']=True; st.session_state['mgr_code']=cc; st.session_state['mgr_name']=mn
-        st.session_state['sel_cust']=None; st.session_state['_mle']=''
-        log_login(cc,mn); return True
+        st.session_state['sel_cust']=None; log_login(cc,mn)
+        return ""
+
+    # pending 자격증명이 있으면 즉시 로그인 시도 (rerun 생존)
+    if not st.session_state.get('mgr_in') and st.session_state.get('_pend_c'):
+        err=_exec_login(st.session_state['_pend_c'],st.session_state.get('_pend_p',''))
+        if not err:
+            st.session_state.pop('_pend_c',None); st.session_state.pop('_pend_p',None); st.session_state.pop('_mle',None)
+        else:
+            st.session_state['_mle']=err; st.session_state.pop('_pend_c',None); st.session_state.pop('_pend_p',None)
 
     if not st.session_state.get('mgr_in'):
         st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 로그인</h1><p class='hero-sub'>코드와 비밀번호를 입력하세요</p></div>",unsafe_allow_html=True)
         with st.form("ml"):
-            st.text_input("매니저 코드",placeholder="코드",key="_mlc")
-            st.text_input("비밀번호",type="password",key="_mlp")
-            submitted=st.form_submit_button("로그인",use_container_width=True,on_click=_try_login)
-        # fallback: on_click 안 먹혔을 때 (모바일)
-        if submitted and not st.session_state.get('mgr_in'):
-            _try_login()
-        err=st.session_state.get('_mle','')
-        if err: st.error(err)
+            ci=st.text_input("매니저 코드",placeholder="코드")
+            pi=st.text_input("비밀번호",type="password")
+            submitted=st.form_submit_button("로그인",use_container_width=True)
+        if submitted:
+            # 즉시 시도
+            err=_exec_login(ci,pi)
+            if err:
+                st.error(err)
+            else:
+                # 성공했지만 rerun에서 풀릴 수 있으므로 pending에도 저장
+                st.session_state['_pend_c']=ci; st.session_state['_pend_p']=pi
+        else:
+            err=st.session_state.get('_mle','')
+            if err: st.error(err); st.session_state.pop('_mle',None)
         if not st.session_state.get('mgr_in'): st.stop()
 
     mgr_c=st.session_state['mgr_code']; mgr_n=st.session_state['mgr_name']
