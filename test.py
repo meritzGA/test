@@ -588,22 +588,6 @@ elif menu=="📱 매니저 화면":
     dcfg=st.session_state.get('display_cols',[]); pcfg=st.session_state.get('prize_config',[]); dlbl=st.session_state.get('display_labels',{})
 
     # ── 매니저 로그인 ──
-    LOGIN_STATE_FILE="login_state.pkl"
-    def _save_login_state(code,name):
-        try:
-            with open(LOGIN_STATE_FILE,'wb') as f: pickle.dump({'code':code,'name':name,'ts':datetime.now().isoformat()},f)
-        except: pass
-    def _load_login_state():
-        if os.path.exists(LOGIN_STATE_FILE):
-            try:
-                with open(LOGIN_STATE_FILE,'rb') as f: return pickle.load(f)
-            except: pass
-        return None
-    def _clear_login_state():
-        if os.path.exists(LOGIN_STATE_FILE):
-            try: os.remove(LOGIN_STATE_FILE)
-            except: pass
-
     def _exec_login(code,pw):
         if pw!=MGR_PW: return "❌ 비밀번호 오류"
         if not code: return "코드를 입력하세요"
@@ -621,33 +605,32 @@ elif menu=="📱 매니저 화면":
                 n=safe_str(ns.iloc[0])
                 if n: mn=n
         st.session_state['mgr_in']=True; st.session_state['mgr_code']=cc; st.session_state['mgr_name']=mn
-        st.session_state['sel_cust']=None; _save_login_state(cc,mn); log_login(cc,mn)
+        st.session_state['sel_cust']=None; log_login(cc,mn)
         return ""
 
-    # 1차 복구: session_state에서 못 찾으면 파일에서 복구
+    # 자동 로그인: 이전 rerun에서 저장된 입력값이 있으면 즉시 시도
     if not st.session_state.get('mgr_in'):
-        ls=_load_login_state()
-        if ls and ls.get('code'):
-            st.session_state['mgr_in']=True; st.session_state['mgr_code']=ls['code']; st.session_state['mgr_name']=ls.get('name','매니저')
-            st.session_state['sel_cust']=None
-
-    # 2차 복구: pending 자격증명
-    if not st.session_state.get('mgr_in') and st.session_state.get('_pend_c'):
-        err=_exec_login(st.session_state['_pend_c'],st.session_state.get('_pend_p',''))
-        if not err: st.session_state.pop('_pend_c',None); st.session_state.pop('_pend_p',None)
-        else: st.session_state.pop('_pend_c',None); st.session_state.pop('_pend_p',None)
+        ac=st.session_state.get('_mlc',''); ap=st.session_state.get('_mlp','')
+        if ac and ap:
+            err=_exec_login(ac,ap)
+            if not err:
+                st.session_state.pop('_mlp',None)
+            else:
+                st.session_state['_mle']=err
 
     if not st.session_state.get('mgr_in'):
         st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 로그인</h1><p class='hero-sub'>코드와 비밀번호를 입력하세요</p></div>",unsafe_allow_html=True)
-        with st.form("ml"):
-            ci=st.text_input("매니저 코드",placeholder="코드")
-            pi=st.text_input("비밀번호",type="password")
-            submitted=st.form_submit_button("로그인",use_container_width=True)
-        if submitted:
-            err=_exec_login(ci,pi)
-            if err: st.error(err)
-            else: st.session_state['_pend_c']=ci; st.session_state['_pend_p']=pi
-        if not st.session_state.get('mgr_in'): st.stop()
+        st.text_input("매니저 코드",placeholder="코드",key="_mlc")
+        st.text_input("비밀번호",type="password",key="_mlp")
+        if st.button("로그인",type="primary",use_container_width=True):
+            ci=st.session_state.get('_mlc',''); pi=st.session_state.get('_mlp','')
+            if ci and pi:
+                err=_exec_login(ci,pi)
+                if err: st.error(err)
+                else: st.session_state.pop('_mlp',None); st.rerun()
+        err=st.session_state.get('_mle','')
+        if err: st.error(err); st.session_state.pop('_mle',None)
+        st.stop()
 
     mgr_c=st.session_state['mgr_code']; mgr_n=st.session_state['mgr_name']
     df['_s1']=df[mc1].apply(clean_key); mask=df['_s1']==mgr_c
@@ -663,7 +646,7 @@ elif menu=="📱 매니저 화면":
     hc1,hc2=st.columns([5,1])
     with hc1: st.markdown(f"<div class='hero-card'><h1 class='hero-name'>{mgr_n} 매니저님</h1><p class='hero-sub'>사용인 {len(my)}명 · {datetime.now().strftime('%Y년 %m월')}</p></div>",unsafe_allow_html=True)
     with hc2: st.write(""); st.write("")
-    if hc2.button("🚪"): st.session_state['mgr_in']=False; st.session_state['sel_cust']=None; _clear_login_state(); st.rerun()
+    if hc2.button("🚪"): st.session_state['mgr_in']=False; st.session_state['sel_cust']=None; st.rerun()
     # 메트릭
     smry=get_mgr_summary(mgr_c); ml={1:"①인사",2:"②인사+리플렛",3:"③실적 및 시상"}
     mh="<div class='metric-row'>"
