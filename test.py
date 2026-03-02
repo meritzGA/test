@@ -84,15 +84,9 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .info-badges .ib { padding:3px 10px; border-radius:6px; font-size:13px; font-weight:600; }
 .info-badges .ib.done { background:#00a85e; color:#fff; }
 .info-badges .ib.wait { background:#f2f4f6; color:#c4c9d0; }
-/* 탭 컨테이너 */
-div[data-baseweb="tab-list"] { gap:6px !important; border-bottom:none !important; }
-/* 탭 버튼 */
-button[data-baseweb="tab"] { font-size:13px !important; font-weight:700 !important; padding:10px 12px !important; border-radius:10px !important; border:2px solid var(--border) !important; background:var(--card) !important; color:var(--text2) !important; transition:all .15s !important; }
-button[data-baseweb="tab"]:hover { border-color:rgba(var(--mr),0.3) !important; background:rgba(var(--mr),0.03) !important; }
-button[data-baseweb="tab"][aria-selected="true"] { background:rgb(var(--mr)) !important; color:#fff !important; border-color:rgb(var(--mr)) !important; }
-/* 탭 하단 인디케이터 숨김 */
-div[data-baseweb="tab-highlight"] { display:none !important; }
-div[data-baseweb="tab-border"] { display:none !important; }
+/* 탭 버튼 카드형 */
+div[data-testid="column"] .stButton button[kind="secondary"] { border:2px solid var(--border) !important; border-radius:10px !important; font-weight:700 !important; font-size:13px !important; }
+div[data-testid="column"] .stButton button[kind="primary"] { border-radius:10px !important; font-weight:700 !important; font-size:13px !important; }
 /* 선택된 카드 강조 */
 .lc.active { border-color:rgb(var(--mr)); border-width:2px; background:rgba(var(--mr),0.02); }
 /* 컴팩트 시상 라인 */
@@ -159,7 +153,7 @@ iframe { width:100% !important; }
 }
 @media (max-width:480px) {
     .hero-card { padding:14px 12px; border-radius:12px; } .hero-name { font-size:18px !important; }
-    button[data-baseweb="tab"] { font-size:12px !important; padding:8px 8px !important; }
+    button[data-baseweb="tab"] { font-size:12px !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -702,8 +696,22 @@ elif menu=="📱 매니저 화면":
         for mt,lb in ml.items():
             ih+=f"<span class='ib {'done' if mt in stypes_s else 'wait'}'>{lb}{'✓' if mt in stypes_s else ''}</span>"
         ih+="</div>"; st.markdown(ih,unsafe_allow_html=True)
-        t1,t2,t3=st.tabs(["①인사말","②인사+리플렛","③실적 및 시상"])
-        with t1:
+
+        # 커스텀 탭 버튼
+        tab_key=f"_tab_{kp}{cnum_s}"
+        if tab_key not in st.session_state: st.session_state[tab_key]=1
+        tab_defs={1:"💬 인사말",2:"📎 인사+리플렛",3:"📊 실적·시상"}
+        tc1,tc2,tc3=st.columns(3)
+        for col_w,tid in [(tc1,1),(tc2,2),(tc3,3)]:
+            with col_w:
+                is_act=st.session_state[tab_key]==tid
+                is_done=tid in stypes_s
+                label=tab_defs[tid]+(" ✓" if is_done else "")
+                if st.button(label,key=f"tb_{kp}{cnum_s}_{tid}",use_container_width=True,type="primary" if is_act else "secondary"):
+                    if not is_act: st.session_state[tab_key]=tid; st.rerun()
+
+        cur_tab=st.session_state[tab_key]
+        if cur_tab==1:
             prefs=load_user_prefs(mgr_c); saved_gr=prefs.get('greeting','')
             gr=st.text_area("인사말",value=saved_gr,placeholder="안녕하세요! 이번 달도 화이팅입니다!",key=f"g_{kp}{cnum_s}",height=60)
             if st.button("💬 저장 & 생성",key=f"gb_{kp}{cnum_s}",use_container_width=True):
@@ -715,7 +723,7 @@ elif menu=="📱 매니저 화면":
                 st.text_area("미리보기",sm,height=80,disabled=True,key=f"p1_{kp}{cnum_s}")
                 render_kakao(sm,"📋 카톡 보내기",f"k1_{kp}{cnum_s}",45)
                 if st.button("✅ 발송 기록",key=f"l1_{kp}{cnum_s}",type="primary"): log_msg(mgr_c,mgr_n,cnum_s,cn_s,1); st.success("✅"); st.rerun()
-        with t2:
+        elif cur_tab==2:
             prefs=load_user_prefs(mgr_c); saved_gr=prefs.get('greeting','')
             st.markdown("<p style='font-size:13px;color:var(--text2);margin-bottom:4px;'>💡 인사말 카톡 → 리플렛 이미지 순서로 보내세요</p>",unsafe_allow_html=True)
             lf=st.file_uploader("리플렛 이미지 (한번 저장하면 유지)",type=["png","jpg","jpeg"],key=f"lf_{kp}{cnum_s}")
@@ -731,7 +739,7 @@ elif menu=="📱 매니저 화면":
             else: st.caption("📷 위에서 리플렛 이미지를 업로드하세요")
             if sm2 or lb:
                 if st.button("✅ 발송 기록",key=f"l2_{kp}{cnum_s}",type="primary"): log_msg(mgr_c,mgr_n,cnum_s,cn_s,2); st.success("✅"); st.rerun()
-        with t3:
+        elif cur_tab==3:
             lines=["📋 메리츠 시상 현황 안내",f"📅 {datetime.now().strftime('%Y.%m.%d')} 기준",""]
             if dcfg:
                 lines.append("━━ 실적 ━━")
