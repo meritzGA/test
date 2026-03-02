@@ -84,9 +84,12 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .info-badges .ib { padding:3px 10px; border-radius:6px; font-size:13px; font-weight:600; }
 .info-badges .ib.done { background:#00a85e; color:#fff; }
 .info-badges .ib.wait { background:#f2f4f6; color:#c4c9d0; }
-/* 탭 버튼 카드형 */
-div[data-testid="column"] .stButton button[kind="secondary"] { border:2px solid var(--border) !important; border-radius:10px !important; font-weight:700 !important; font-size:13px !important; }
-div[data-testid="column"] .stButton button[kind="primary"] { border-radius:10px !important; font-weight:700 !important; font-size:13px !important; }
+/* 탭 라디오 카드형 */
+div[role="radiogroup"] { gap:6px !important; }
+div[role="radiogroup"] label { background:var(--card) !important; border:2px solid var(--border) !important; border-radius:10px !important; padding:10px 10px !important; font-weight:700 !important; font-size:13px !important; cursor:pointer !important; transition:all .15s !important; }
+div[role="radiogroup"] label:has(input:checked) { background:rgb(var(--mr)) !important; border-color:rgb(var(--mr)) !important; color:#fff !important; }
+div[role="radiogroup"] label:hover { border-color:rgba(var(--mr),0.4) !important; }
+div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-size:13px !important; font-weight:700 !important; }
 /* 선택된 카드 강조 */
 .lc.active { border-color:rgb(var(--mr)); border-width:2px; background:rgba(var(--mr),0.02); }
 /* 컴팩트 시상 라인 */
@@ -692,20 +695,15 @@ elif menu=="📱 매니저 화면":
     # ── 활동 패널 렌더링 함수 ──
     def render_detail(cn_s,cnum_s,co_s,cc_s,crow,kp=""):
         logs_s=get_cust_logs(mgr_c,cnum_s); stypes_s=set(l['message_type'] for l in logs_s)
-        # 커스텀 탭 버튼 (완료 상태 포함)
+        # 커스텀 탭 (radio horizontal)
         tab_key=f"_tab_{kp}{cnum_s}"
-        if tab_key not in st.session_state: st.session_state[tab_key]=1
-        tab_defs={1:"💬 인사말",2:"📎 인사+리플렛",3:"📊 실적·시상"}
-        tc1,tc2,tc3=st.columns(3)
-        for col_w,tid in [(tc1,1),(tc2,2),(tc3,3)]:
-            with col_w:
-                is_act=st.session_state[tab_key]==tid
-                is_done=tid in stypes_s
-                label=tab_defs[tid]+(" ✅" if is_done else "")
-                if st.button(label,key=f"tb_{kp}{cnum_s}_{tid}",use_container_width=True,type="primary" if is_act else "secondary"):
-                    if not is_act: st.session_state[tab_key]=tid; st.rerun()
-
-        cur_tab=st.session_state[tab_key]
+        tab_labels=[]
+        for tid in [1,2,3]:
+            is_done=tid in stypes_s
+            names={1:"💬 인사말",2:"📎 인사+리플렛",3:"📊 실적·시상"}
+            tab_labels.append(names[tid]+(" ✅" if is_done else ""))
+        sel_tab=st.radio("활동",tab_labels,horizontal=True,key=tab_key,label_visibility="collapsed")
+        cur_tab=tab_labels.index(sel_tab)+1
         if cur_tab==1:
             prefs=load_user_prefs(mgr_c); saved_gr=prefs.get('greeting','')
             gr=st.text_area("인사말",value=saved_gr,placeholder="안녕하세요! 이번 달도 화이팅입니다!",key=f"g_{kp}{cnum_s}",height=60)
