@@ -692,12 +692,7 @@ elif menu=="📱 매니저 화면":
     # ── 활동 패널 렌더링 함수 ──
     def render_detail(cn_s,cnum_s,co_s,cc_s,crow,kp=""):
         logs_s=get_cust_logs(mgr_c,cnum_s); stypes_s=set(l['message_type'] for l in logs_s)
-        ih="<div class='info-badges' style='margin:4px 0 8px;'>"
-        for mt,lb in ml.items():
-            ih+=f"<span class='ib {'done' if mt in stypes_s else 'wait'}'>{lb}{'✓' if mt in stypes_s else ''}</span>"
-        ih+="</div>"; st.markdown(ih,unsafe_allow_html=True)
-
-        # 커스텀 탭 버튼
+        # 커스텀 탭 버튼 (완료 상태 포함)
         tab_key=f"_tab_{kp}{cnum_s}"
         if tab_key not in st.session_state: st.session_state[tab_key]=1
         tab_defs={1:"💬 인사말",2:"📎 인사+리플렛",3:"📊 실적·시상"}
@@ -706,7 +701,7 @@ elif menu=="📱 매니저 화면":
             with col_w:
                 is_act=st.session_state[tab_key]==tid
                 is_done=tid in stypes_s
-                label=tab_defs[tid]+(" ✓" if is_done else "")
+                label=tab_defs[tid]+(" ✅" if is_done else "")
                 if st.button(label,key=f"tb_{kp}{cnum_s}_{tid}",use_container_width=True,type="primary" if is_act else "secondary"):
                     if not is_act: st.session_state[tab_key]=tid; st.rerun()
 
