@@ -574,8 +574,9 @@ elif menu=="📱 매니저 화면":
     _cba=st.session_state.get('cust_branch_col_a',''); _cbb=st.session_state.get('cust_branch_col_b','')
     dcfg=st.session_state.get('display_cols',[]); pcfg=st.session_state.get('prize_config',[]); dlbl=st.session_state.get('display_labels',{})
 
-    # ── 매니저 로그인 (on_click 콜백: rerun 전에 상태 확정) ──
+    # ── 매니저 로그인 ──
     def _do_mgr_login():
+        """on_click: rerun 전에 상태 확정"""
         ci=st.session_state.get('_mlc',''); pi=st.session_state.get('_mlp','')
         if pi!=MGR_PW: st.session_state['_mle']="❌ 비밀번호 오류"; return
         if not ci: st.session_state['_mle']="코드를 입력하세요"; return
@@ -598,12 +599,13 @@ elif menu=="📱 매니저 화면":
 
     if not st.session_state.get('mgr_in'):
         st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 로그인</h1><p class='hero-sub'>코드와 비밀번호를 입력하세요</p></div>",unsafe_allow_html=True)
-        st.text_input("매니저 코드",placeholder="코드",key="_mlc")
-        st.text_input("비밀번호",type="password",key="_mlp")
-        st.button("로그인",type="primary",use_container_width=True,on_click=_do_mgr_login)
+        with st.form("ml"):
+            st.text_input("매니저 코드",placeholder="코드",key="_mlc")
+            st.text_input("비밀번호",type="password",key="_mlp")
+            st.form_submit_button("로그인",use_container_width=True,on_click=_do_mgr_login)
         err=st.session_state.get('_mle','')
         if err: st.error(err)
-        st.stop()
+        if not st.session_state.get('mgr_in'): st.stop()
 
     mgr_c=st.session_state['mgr_code']; mgr_n=st.session_state['mgr_name']
     df['_s1']=df[mc1].apply(clean_key); mask=df['_s1']==mgr_c
