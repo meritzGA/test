@@ -60,16 +60,16 @@ section[data-testid="stSidebar"] .stRadio label span { color:#fff !important; fo
 .lc-pill.g { background:#e8f5e9; color:#2e7d32; }
 .lc-bottom { display:flex; gap:4px; margin-top:6px; }
 .lc-dot { display:flex; align-items:center; gap:3px; font-size:11px; color:var(--text3); padding:2px 6px; border-radius:5px; background:#f7f8fa; font-weight:500; }
-.lc-dot.done { background:rgba(0,196,113,0.12); color:#00a85e; font-weight:700; }
+.lc-dot.done { background:#00a85e; color:#fff; font-weight:700; }
 .lc-dot .dot { width:7px; height:7px; border-radius:50%; background:#d5d8db; flex-shrink:0; }
-.lc-dot.done .dot { background:#00c471; }
+.lc-dot.done .dot { background:#fff; }
 /* 사용인 정보 카드 */
 .info-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:12px 16px; margin-bottom:8px; }
 .info-card .ic-name { font-size:22px; font-weight:800; color:var(--text1); }
 .info-card .ic-meta { font-size:14px; color:var(--text2); margin-top:3px; }
 .info-badges { display:flex; gap:5px; margin-top:8px; }
 .info-badges .ib { padding:3px 10px; border-radius:6px; font-size:13px; font-weight:600; }
-.info-badges .ib.done { background:#e8f8ef; color:#00a85e; }
+.info-badges .ib.done { background:#00a85e; color:#fff; }
 .info-badges .ib.wait { background:#f2f4f6; color:#c4c9d0; }
 /* 탭 크기 */
 button[data-baseweb="tab"] { font-size:15px !important; font-weight:700 !important; padding:10px 16px !important; }
@@ -663,10 +663,10 @@ elif menu=="📱 매니저 화면":
             prefs=load_user_prefs(mgr_c); saved_gr=prefs.get('greeting','')
             gr=st.text_area("인사말",value=saved_gr,placeholder="안녕하세요! 이번 달도 화이팅입니다!",key=f"g_{kp}{cnum_s}",height=60)
             if st.button("💬 저장 & 생성",key=f"gb_{kp}{cnum_s}",use_container_width=True):
-                if gr: prefs['greeting']=gr; save_user_prefs(prefs,mgr_c); st.session_state[f'msg1_{kp}{cnum_s}']=f"안녕하세요, {cn_s}님!\n{mgr_n} 매니저입니다.\n\n{gr}"
+                if gr: prefs['greeting']=gr; save_user_prefs(prefs,mgr_c); st.session_state[f'msg1_{kp}{cnum_s}']=f"안녕하세요, {cn_s}팀장님!\n{mgr_n} 매니저입니다.\n\n{gr}"
                 else: st.warning("입력하세요")
             sm=st.session_state.get(f'msg1_{kp}{cnum_s}','')
-            if not sm and saved_gr: sm=f"안녕하세요, {cn_s}님!\n{mgr_n} 매니저입니다.\n\n{saved_gr}"; st.session_state[f'msg1_{kp}{cnum_s}']=sm
+            if not sm and saved_gr: sm=f"안녕하세요, {cn_s}팀장님!\n{mgr_n} 매니저입니다.\n\n{saved_gr}"; st.session_state[f'msg1_{kp}{cnum_s}']=sm
             if sm:
                 st.text_area("미리보기",sm,height=80,disabled=True,key=f"p1_{kp}{cnum_s}")
                 render_kakao(sm,"📋 카톡 보내기",f"k1_{kp}{cnum_s}",45)
@@ -679,7 +679,7 @@ elif menu=="📱 매니저 화면":
             lb=prefs.get('leaflet'); ln=prefs.get('leaflet_name','')
             st.markdown("<p style='font-size:14px;font-weight:700;margin:8px 0 4px;'>📝 STEP 1. 인사말 보내기</p>",unsafe_allow_html=True)
             sm2=''
-            if saved_gr: sm2=f"안녕하세요, {cn_s}님!\n{mgr_n} 매니저입니다.\n\n{saved_gr}"
+            if saved_gr: sm2=f"안녕하세요, {cn_s}팀장님!\n{mgr_n} 매니저입니다.\n\n{saved_gr}"
             if sm2: st.text_area("인사말",sm2,height=60,disabled=True,key=f"p2t_{kp}{cnum_s}"); render_kakao(sm2,"📋 인사말 카톡",f"k2t_{kp}{cnum_s}",45)
             else: st.caption("①인사말 탭에서 인사말을 먼저 저장하세요")
             st.markdown("<p style='font-size:14px;font-weight:700;margin:8px 0 4px;'>🖼️ STEP 2. 리플렛 보내기</p>",unsafe_allow_html=True)
@@ -728,26 +728,28 @@ elif menu=="📱 매니저 화면":
                 if st.button("✅ 발송 기록",key=f"l3_{kp}{cnum_s}",type="primary"): log_msg(mgr_c,mgr_n,cnum_s,cn_s,3); st.success("✅"); st.rerun()
             else: st.info("실적/시상 데이터가 없습니다")
 
-    # ── 뷰 모드 (JS 자동 감지 + 수동 전환) ──
+    # ── 뷰 모드 (JS → streamlit 통신) ──
     import streamlit.components.v1 as comp_v1
     if 'view_mode' not in st.session_state: st.session_state['view_mode']='desktop'
-    comp_v1.html("""<script>
-    (function(){
-        try {
-            var w=window.parent.innerWidth||window.innerWidth;
-            var sp=new URLSearchParams(window.parent.location.search);
-            if(!sp.has('vm_set')){
-                sp.set('vm_set','1');
-                if(w<=768) sp.set('vm','mobile'); else sp.set('vm','desktop');
-                window.parent.history.replaceState({},'',window.parent.location.pathname+'?'+sp.toString());
-                window.parent.location.reload();
-            }
-        }catch(e){}
-    })();
-    </script>""",height=0)
+    # JS: 화면 너비 감지해서 query param만 세팅 (reload 안함)
+    if 'vm' not in st.query_params:
+        comp_v1.html("""<script>
+        (function(){
+            try {
+                var w=window.parent.innerWidth||window.innerWidth;
+                var m=(w<=768)?'mobile':'desktop';
+                // streamlit query param으로 전달
+                var url=new URL(window.parent.location.href);
+                if(!url.searchParams.has('vm')){
+                    url.searchParams.set('vm',m);
+                    window.parent.history.replaceState({},'',url.toString());
+                }
+            }catch(e){}
+        })();
+        </script>""",height=0)
     qp=st.query_params
-    if qp.get('vm')=='mobile' and st.session_state['view_mode']!='mobile': st.session_state['view_mode']='mobile'
-    elif qp.get('vm')=='desktop' and st.session_state['view_mode']!='desktop': st.session_state['view_mode']='desktop'
+    if qp.get('vm')=='mobile': st.session_state['view_mode']='mobile'
+    elif qp.get('vm')=='desktop': st.session_state['view_mode']='desktop'
 
     vc1,vc2=st.columns([9,1])
     with vc2:
