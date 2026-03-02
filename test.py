@@ -578,22 +578,24 @@ elif menu=="📱 매니저 화면":
         st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 로그인</h1><p class='hero-sub'>코드와 비밀번호를 입력하세요</p></div>",unsafe_allow_html=True)
         with st.form("ml"):
             ci=st.text_input("매니저 코드",placeholder="코드"); pi=st.text_input("비밀번호",type="password")
-            if st.form_submit_button("로그인",use_container_width=True):
-                if pi!=MGR_PW: st.error("❌ 비밀번호 오류")
-                elif not ci: st.error("코드를 입력하세요")
+            submitted=st.form_submit_button("로그인",use_container_width=True)
+        if submitted:
+            if pi!=MGR_PW: st.error("❌ 비밀번호 오류")
+            elif not ci: st.error("코드를 입력하세요")
+            else:
+                cc=clean_key(ci); df['_s1']=df[mc1].apply(clean_key); mask=df['_s1']==cc
+                if mc2 and mc2 in df.columns: df['_s2']=df[mc2].apply(clean_key); mask=mask|(df['_s2']==cc)
+                found=df[mask]
+                if found.empty: st.error(f"❌ '{ci}' 없음")
                 else:
-                    cc=clean_key(ci); df['_s1']=df[mc1].apply(clean_key); mask=df['_s1']==cc
-                    if mc2 and mc2 in df.columns: df['_s2']=df[mc2].apply(clean_key); mask=mask|(df['_s2']==cc)
-                    my=df[mask]
-                    if my.empty: st.error(f"❌ '{ci}' 없음")
-                    else:
-                        mn="매니저"
-                        if mn_col in my.columns:
-                            ns=my[mn_col].dropna(); ns=ns[ns.astype(str).str.strip()!='']
-                            if not ns.empty:
-                                n=safe_str(ns.iloc[0])
-                                if n: mn=n
-                        st.session_state.update({'mgr_in':True,'mgr_code':cc,'mgr_name':mn,'sel_cust':None}); log_login(cc,mn); st.rerun()
+                    mn="매니저"
+                    if mn_col in found.columns:
+                        ns=found[mn_col].dropna(); ns=ns[ns.astype(str).str.strip()!='']
+                        if not ns.empty:
+                            n=safe_str(ns.iloc[0])
+                            if n: mn=n
+                    st.session_state['mgr_in']=True; st.session_state['mgr_code']=cc; st.session_state['mgr_name']=mn; st.session_state['sel_cust']=None
+                    log_login(cc,mn); st.rerun()
         st.stop()
 
     mgr_c=st.session_state['mgr_code']; mgr_n=st.session_state['mgr_name']
@@ -728,35 +730,15 @@ elif menu=="📱 매니저 화면":
                 if st.button("✅ 발송 기록",key=f"l3_{kp}{cnum_s}",type="primary"): log_msg(mgr_c,mgr_n,cnum_s,cn_s,3); st.success("✅"); st.rerun()
             else: st.info("실적/시상 데이터가 없습니다")
 
-    # ── 뷰 모드 (JS → streamlit 통신) ──
-    import streamlit.components.v1 as comp_v1
+    # ── 뷰 모드 (수동 전환) ──
     if 'view_mode' not in st.session_state: st.session_state['view_mode']='desktop'
-    # JS: 화면 너비 감지해서 query param만 세팅 (reload 안함)
-    if 'vm' not in st.query_params:
-        comp_v1.html("""<script>
-        (function(){
-            try {
-                var w=window.parent.innerWidth||window.innerWidth;
-                var m=(w<=768)?'mobile':'desktop';
-                // streamlit query param으로 전달
-                var url=new URL(window.parent.location.href);
-                if(!url.searchParams.has('vm')){
-                    url.searchParams.set('vm',m);
-                    window.parent.history.replaceState({},'',url.toString());
-                }
-            }catch(e){}
-        })();
-        </script>""",height=0)
-    qp=st.query_params
-    if qp.get('vm')=='mobile': st.session_state['view_mode']='mobile'
-    elif qp.get('vm')=='desktop': st.session_state['view_mode']='desktop'
 
     vc1,vc2=st.columns([9,1])
     with vc2:
         cur_icon="📱" if st.session_state['view_mode']=='mobile' else "🖥️"
         if st.button(cur_icon,key="vm_toggle"):
             nxt='desktop' if st.session_state['view_mode']=='mobile' else 'mobile'
-            st.session_state['view_mode']=nxt; st.session_state['sel_cust']=None; st.query_params['vm']=nxt; st.rerun()
+            st.session_state['view_mode']=nxt; st.session_state['sel_cust']=None; st.rerun()
 
     srch=st.text_input("🔍",placeholder="이름/소속 검색",key="cs",label_visibility="collapsed")
     fdf=my.copy()
