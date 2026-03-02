@@ -575,18 +575,17 @@ elif menu=="📱 매니저 화면":
     dcfg=st.session_state.get('display_cols',[]); pcfg=st.session_state.get('prize_config',[]); dlbl=st.session_state.get('display_labels',{})
 
     # ── 매니저 로그인 ──
-    def _do_mgr_login():
-        """on_click: rerun 전에 상태 확정"""
+    def _try_login():
         ci=st.session_state.get('_mlc',''); pi=st.session_state.get('_mlp','')
-        if pi!=MGR_PW: st.session_state['_mle']="❌ 비밀번호 오류"; return
-        if not ci: st.session_state['_mle']="코드를 입력하세요"; return
+        if pi!=MGR_PW: st.session_state['_mle']="❌ 비밀번호 오류"; return False
+        if not ci: st.session_state['_mle']="코드를 입력하세요"; return False
         _df=st.session_state['df_merged'].copy()
         _mc1=st.session_state['manager_col']; _mc2=st.session_state.get('manager_col2','')
         _mn_col=st.session_state.get('manager_name_col',_mc1)
         cc=clean_key(ci); _df['_s1']=_df[_mc1].apply(clean_key); mask=_df['_s1']==cc
         if _mc2 and _mc2 in _df.columns: _df['_s2']=_df[_mc2].apply(clean_key); mask=mask|(_df['_s2']==cc)
         found=_df[mask]
-        if found.empty: st.session_state['_mle']=f"❌ '{ci}' 없음"; return
+        if found.empty: st.session_state['_mle']=f"❌ '{ci}' 없음"; return False
         mn="매니저"
         if _mn_col in found.columns:
             ns=found[_mn_col].dropna(); ns=ns[ns.astype(str).str.strip()!='']
@@ -595,14 +594,17 @@ elif menu=="📱 매니저 화면":
                 if n: mn=n
         st.session_state['mgr_in']=True; st.session_state['mgr_code']=cc; st.session_state['mgr_name']=mn
         st.session_state['sel_cust']=None; st.session_state['_mle']=''
-        log_login(cc,mn)
+        log_login(cc,mn); return True
 
     if not st.session_state.get('mgr_in'):
         st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 로그인</h1><p class='hero-sub'>코드와 비밀번호를 입력하세요</p></div>",unsafe_allow_html=True)
         with st.form("ml"):
             st.text_input("매니저 코드",placeholder="코드",key="_mlc")
             st.text_input("비밀번호",type="password",key="_mlp")
-            st.form_submit_button("로그인",use_container_width=True,on_click=_do_mgr_login)
+            submitted=st.form_submit_button("로그인",use_container_width=True,on_click=_try_login)
+        # fallback: on_click 안 먹혔을 때 (모바일)
+        if submitted and not st.session_state.get('mgr_in'):
+            _try_login()
         err=st.session_state.get('_mle','')
         if err: st.error(err)
         if not st.session_state.get('mgr_in'): st.stop()
