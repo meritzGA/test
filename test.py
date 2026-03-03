@@ -301,7 +301,7 @@ def calculate_agent_performance(target_code):
                 if not prize_details: continue
                 vp = safe_float(match_df[cfg['col_val_prev']].values[0]) if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
                 vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
-                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"브릿지1","val_prev":vp,"val_curr":vc,"prize":prize,"prize_details":prize_details})
+                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"브릿지1","val_prev":vp,"val_curr":vc,"prize":prize,"prize_details":prize_details,"curr_req":float(cfg.get('curr_req',100000.0))})
             elif "2기간" in p_type:
                 vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
                 curr_req = float(cfg.get('curr_req', 100000.0))
@@ -335,9 +335,12 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
         sh = f"<div class='summary-card'><div class='summary-label'>{user_name} 팀장님의 시책 현황</div><div class='summary-total'>{weekly_total:,.0f}원</div><div class='summary-divider'></div>"
         share_text += "📌 [진행 중인 시책]\n"
         for res in weekly_res:
-            if res['type'] == "브릿지2":
+            if res['type'] == "브릿지1":
                 sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(다음 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
                 share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
+            elif res['type'] == "브릿지2":
+                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(이번 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (이번 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
             else:
                 sh += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
                 share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원\n"
@@ -355,15 +358,15 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                 share_text += f"\n[{res['name']}]\n- 현재실적: {res['val']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
                 for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
             elif res['type'] == "브릿지1":
-                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
-                share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원\n- 당월실적: {res['val_curr']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
+                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>다음 달 {int(res['curr_req']//10000)}만 가동 시<br>시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
+                share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원\n- 당월실적: {res['val_curr']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
                 for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
             elif res['type'] == "브릿지2":
                 sfh = ""
                 if res.get('shortfall',0) > 0 and res.get('next_tier'):
                     sfh = f"<div class='shortfall-row'><span class='shortfall-text'>🚀 다음 {int(res['next_tier']//10000)}만 구간까지 {res['shortfall']:,.0f}원 남음!</span></div>"
-                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>당월 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div><div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div><div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div>{sfh}<div class='toss-divider'></div><div class='prize-row'><span class='prize-label'>다음 달 {int(res['curr_req']//10000)}만 가동 시<br>시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
-                share_text += f"\n[{res['name']}]\n- 당월실적: {res['val']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (차월조건)\n"
+                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>당월 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div><div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div><div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div>{sfh}<div class='toss-divider'></div><div class='prize-row'><span class='prize-label'>이번 달 {int(res['curr_req']//10000)}만 가동 시<br>시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
+                share_text += f"\n[{res['name']}]\n- 당월실적: {res['val']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (이번 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
                 if res.get('shortfall',0) > 0: share_text += f"🚀 다음 {int(res['next_tier']//10000)}만 구간까지 {res['shortfall']:,.0f}원 남음!\n"
             st.markdown(ch, unsafe_allow_html=True)
     if cumul_res:
@@ -628,12 +631,15 @@ elif mode == "⚙️ 시스템 관리자":
             if "1기간" in cfg['type']:
                 cfg['col_val_prev']=st.selectbox("전월 실적",cols,index=_get_idx(cfg.get('col_val_prev',''),cols),key=f"cvalp_{i}")
                 cfg['col_val_curr']=st.selectbox("당월 실적",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc_{i}")
+                cfg['curr_req']=st.number_input("다음 달 필수 가동 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq1_{i}")
+                st.caption("💡 브릿지 1기간: 이번 달 구간 확보 → 다음 달 가동 시 시상 확정")
             elif "2기간" in cfg['type']:
                 cfg['col_val_curr']=st.selectbox("당월 실적 수치",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc2_{i}")
             else:
                 cfg['col_val']=st.selectbox("실적 수치",cols,index=_get_idx(cfg.get('col_val',''),cols),key=f"cval_{i}")
             if "2기간" in cfg['type']:
-                cfg['curr_req']=st.number_input("차월 필수 달성 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq2_{i}")
+                cfg['curr_req']=st.number_input("이번 달 필수 가동 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq2_{i}")
+                st.caption("💡 브릿지 2기간: 지난 달 구간 확정 → 이번 달 가동 시 시상 확정")
                 st.write("📈 구간 설정 (달성금액,지급률%)")
                 ts="\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers',[])])
                 ti=st.text_area("엔터로 줄바꿈",value=ts,height=150,key=f"tier_{i}")
