@@ -62,15 +62,129 @@ def copy_btn_component(text):
     """
     components.html(js_code, height=85)
 
-# 데이터 불러오기 로직
-if 'raw_data' not in st.session_state:
-    st.session_state['raw_data'] = {}
-    for file in os.listdir(DATA_DIR):
-        if file.endswith('.pkl'):
-            df = pd.read_pickle(os.path.join(DATA_DIR, file))
+# 🌟 [오류 해결] 엑셀 외계어(_xHHHH_) 복원 및 정제 함수 🌟
+def safe_str(val):
+    if pd.isna(val) or val is None: return ""
+    try:
+        if isinstance(val, (int, float)) and float(val).is_integer():
+            val = int(float(val))
+    except:
+        pass
+    s = str(val)
+    s = re.sub(r'_[xX]([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
+    s = re.sub(r'\s+', '', s)
+    if s.endswith('.0'): 
+        s = s[:-2]
+    return s.upper()
+
+# 🌟 [속도 100배 향상 핵심] 정제된 데이터를 캐싱하여 중복 연산 완전 제거 🌟
+def get_clean_series(df, col_name):
+    clean_col_name = f"_clean_{col_name}"
+    if clean_col_name not in df.columns:
+        df[clean_col_name] = df[col_name].apply(safe_str)
+    return df[clean_col_name]
+
+def safe_float(val):
+    if pd.isna(val) or val is None: return 0.0
+    s = str(val).replace(',', '').strip()
+    try: return float(s)
+    except: return 0.0
+
+# ==========================================
+# 🔗 핵심: 사전 병합(Pre-Merge) 로직
+# ==========================================
+def _load_and_clean_file(filepath):
+    """pkl 파일을 로드하고 엑셀 이스케이프를 정리"""
+    df = pd.read_pickle(filepath)
+    df.columns = [_clean_excel_text(str(c)) for c in df.columns]
+    for col in df.select_dtypes(include='object').columns:
+        df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
+    return df
+
+def build_merged_data(config_list, raw_data):
+    """각 config 항목에 대해 인적사항 파일 + 실적 파일을 사전 병합.
+    결과를 config index 기준으로 딕셔너리에 저장.
+    관리자 저장 시 1회만 실행 → 이후 조회는 병합된 단일 DataFrame에서 즉시 lookup."""
+    merged = {}
+    for idx, cfg in enumerate(config_list):
+        file_info = cfg.get('file_info') or cfg.get('file', '')
+        file_perf = cfg.get('file_perf') or cfg.get('file', '')
+        
+        df_info = raw_data.get(file_info)
+        if df_info is None:
+            continue
+        
+        # 같은 파일이거나 실적 파일이 없으면 단일 파일 사용
+        df_perf = raw_data.get(file_perf)
+        if file_info == file_perf or df_perf is None:
+            merged[idx] = df_info.copy()
+            continue
+        
+        # 두 파일 병합: 인적사항 파일의 코드 컬럼 ↔ 실적 파일의 코드 컬럼
+        col_code_info = cfg.get('col_code', '')
+        col_code_perf = cfg.get('col_code_perf', '')
+        
+        if not col_code_info or col_code_info not in df_info.columns:
+            merged[idx] = df_info.copy()
+            continue
+        if not col_code_perf or col_code_perf not in df_perf.columns:
+            merged[idx] = df_info.copy()
+            continue
+        
+        # 정제된 코드로 병합 키 생성
+        df_i = df_info.copy()
+        df_p = df_perf.copy()
+        df_i['_merge_key'] = df_i[col_code_info].apply(safe_str)
+        df_p['_merge_key'] = df_p[col_code_perf].apply(safe_str)
+        
+        # 실적 파일에서 인적사항 파일과 겹치는 컬럼 제거 (병합키 제외)
+        info_cols = set(df_i.columns)
+        perf_cols_keep = ['_merge_key'] + [c for c in df_p.columns if c not in info_cols]
+        
+        merged_df = pd.merge(
+            df_i, df_p[perf_cols_keep],
+            on='_merge_key', how='left'
+        )
+        merged_df.drop(columns=['_merge_key'], inplace=True)
+        merged[idx] = merged_df
+    
+    return merged
+
+def save_merged_to_disk(merged_data):
+    """병합된 데이터를 디스크에 pkl로 저장 (앱 재시작 시 빠른 복원용)"""
+    for idx, df in merged_data.items():
+        df.to_pickle(os.path.join(DATA_DIR, f"_merged_{idx}.pkl"))
+    # 이전 병합 파일 중 사용하지 않는 것 정리
+    for f in os.listdir(DATA_DIR):
+        if f.startswith('_merged_') and f.endswith('.pkl'):
+            try:
+                fidx = int(f.replace('_merged_', '').replace('.pkl', ''))
+                if fidx not in merged_data:
+                    os.remove(os.path.join(DATA_DIR, f))
+            except:
+                pass
+
+def load_merged_from_disk(config_list):
+    """디스크에서 사전 병합된 pkl 파일 로드"""
+    merged = {}
+    for idx in range(len(config_list)):
+        path = os.path.join(DATA_DIR, f"_merged_{idx}.pkl")
+        if os.path.exists(path):
+            df = pd.read_pickle(path)
             df.columns = [_clean_excel_text(str(c)) for c in df.columns]
             for col in df.select_dtypes(include='object').columns:
                 df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
+            merged[idx] = df
+    return merged
+
+# ==========================================
+# 📦 데이터 로딩 (앱 시작 시)
+# ==========================================
+if 'raw_data' not in st.session_state:
+    st.session_state['raw_data'] = {}
+    for file in os.listdir(DATA_DIR):
+        if file.endswith('.pkl') and not file.startswith('_merged_'):
+            df = _load_and_clean_file(os.path.join(DATA_DIR, file))
             st.session_state['raw_data'][file.replace('.pkl', '')] = df
 
 if 'config' not in st.session_state:
@@ -85,46 +199,24 @@ if 'config' not in st.session_state:
 for c in st.session_state['config']:
     if 'category' not in c:
         c['category'] = 'weekly'
+    # 🌟 구형 호환: 단일 file → file_info/file_perf
+    if 'file_info' not in c and 'file' in c:
+        c['file_info'] = c['file']
+        c['file_perf'] = c['file']
+        c['col_code_perf'] = c.get('col_code', '')
 
-# 🌟 [오류 해결] 엑셀 외계어(_xHHHH_) 복원 및 정제 함수 🌟
-def safe_str(val):
-    if pd.isna(val) or val is None: return ""
-    
-    try:
-        # 소수점으로 읽힌 사번 복구 (예: 12345.0 -> 12345)
-        if isinstance(val, (int, float)) and float(val).is_integer():
-            val = int(float(val))
-    except:
-        pass
-        
-    s = str(val)
-    
-    # 1. 엑셀의 숨겨진 16진수 외계어(_x0033_ 등)를 원래 문자(3 등)로 완벽 복원
-    s = re.sub(r'_[xX]([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
-    
-    # 2. 보이지 않는 띄어쓰기, 엔터, 탭 강제 삭제
-    s = re.sub(r'\s+', '', s)
-    
-    # 3. 문자열에 남은 .0 잔재 제거
-    if s.endswith('.0'): 
-        s = s[:-2]
-        
-    # 4. 알파벳 대문자 통일 (매칭률 100% 보장)
-    return s.upper()
+# 🌟 사전 병합 데이터 로드 (디스크 캐시 우선, 없으면 런타임 빌드)
+if 'merged_data' not in st.session_state:
+    merged = load_merged_from_disk(st.session_state['config'])
+    if merged:
+        st.session_state['merged_data'] = merged
+    elif st.session_state['raw_data'] and st.session_state['config']:
+        st.session_state['merged_data'] = build_merged_data(
+            st.session_state['config'], st.session_state['raw_data']
+        )
+    else:
+        st.session_state['merged_data'] = {}
 
-# 🌟 [속도 100배 향상 핵심] 정제된 데이터를 캐싱하여 중복 연산 완전 제거 🌟
-def get_clean_series(df, col_name):
-    clean_col_name = f"_clean_{col_name}"
-    # 한 번 정제된 컬럼이 없다면 최초 1회만 정제 연산을 수행하여 데이터프레임에 저장
-    if clean_col_name not in df.columns:
-        df[clean_col_name] = df[col_name].apply(safe_str)
-    return df[clean_col_name]
-
-def safe_float(val):
-    if pd.isna(val) or val is None: return 0.0
-    s = str(val).replace(',', '').strip()
-    try: return float(s)
-    except: return 0.0
 
 # --- 🎨 커스텀 CSS (라이트/다크모드 완벽 대응) ---
 st.markdown("""
@@ -149,7 +241,6 @@ st.markdown("""
 
     [data-testid="stForm"] { background-color: transparent; border: none; padding: 0; margin-bottom: 24px; }
 
-    /* 공통 텍스트 타이틀 클래스 */
     .admin-title { color: #191f28; font-weight: 800; font-size: 1.8rem; margin-top: 20px; }
     .sub-title { color: #191f28; font-size: 1.4rem; margin-top: 30px; font-weight: 700; }
     .config-title { color: #191f28; font-size: 1.3rem; margin: 0; font-weight: 700; }
@@ -157,12 +248,10 @@ st.markdown("""
     .blue-title { color: #1e3c72; font-size: 1.4rem; margin-top: 10px; font-weight: 800; }
     .agent-title { color: #3182f6; font-weight: 800; font-size: 1.5rem; margin-top: 0; text-align: center; }
 
-    /* 공통 박스 클래스 */
     .config-box { background: #f9fafb; padding: 15px; border-radius: 15px; border: 1px solid #e5e8eb; margin-top: 15px; }
     .config-box-blue { background: #f0f4f8; padding: 15px; border-radius: 15px; border: 1px solid #c7d2fe; margin-top: 15px; }
     .detail-box { background: #ffffff; padding: 20px; border-radius: 20px; border: 2px solid #e5e8eb; margin-top: 10px; margin-bottom: 30px; }
 
-    /* 시책 요약 카드 (상단) */
     .summary-card { 
         background: linear-gradient(135deg, rgb(160, 20, 20) 0%, rgb(128, 0, 0) 100%); 
         border-radius: 20px; padding: 32px 24px; margin-bottom: 24px; border: none;
@@ -179,7 +268,6 @@ st.markdown("""
     .summary-item-val { color: #ffffff; font-size: 1.3rem; font-weight: 800; white-space: nowrap; }
     .summary-divider { height: 1px; background-color: rgba(255,255,255,0.2); margin: 16px 0; }
     
-    /* 개별 상세 카드 */
     .toss-card { 
         background: #ffffff; border-radius: 20px; padding: 28px 24px; 
         margin-bottom: 16px; border: 1px solid #e5e8eb; box-shadow: 0 4px 20px rgba(0,0,0,0.03); 
@@ -191,7 +279,6 @@ st.markdown("""
     .data-label { color: #8b95a1; font-size: 1.1rem; word-break: keep-all; }
     .data-value { color: #333d4b; font-size: 1.3rem; font-weight: 600; white-space: nowrap; }
     
-    /* 상위 구간 부족 금액 강조 디자인 */
     .shortfall-row { background-color: #fff0f0; padding: 14px; border-radius: 12px; margin-top: 15px; margin-bottom: 5px; border: 2px dashed #ff4b4b; text-align: center; }
     .shortfall-text { color: #d9232e; font-size: 1.2rem; font-weight: 800; word-break: keep-all; }
 
@@ -202,7 +289,6 @@ st.markdown("""
     .toss-divider { height: 1px; background-color: #e5e8eb; margin: 16px 0; }
     .sub-data { font-size: 1rem; color: #8b95a1; margin-top: 4px; text-align: right; }
     
-    /* 누계 전용 세로 정렬 박스 */
     .cumul-stack-box {
         background: #ffffff; border: 1px solid #e5e8eb; border-left: 6px solid #2a5298; 
         border-radius: 16px; padding: 20px 24px; margin-bottom: 16px; 
@@ -214,7 +300,10 @@ st.markdown("""
     .cumul-stack-val { font-size: 1.05rem; color: #8b95a1; }
     .cumul-stack-prize { font-size: 1.6rem; color: #d9232e; font-weight: 800; text-align: right; white-space: nowrap; }
     
-    /* 입력 컴포넌트 */
+    .file-tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; margin-left: 4px; }
+    .file-tag-info { background: #e8f5e9; color: #2e7d32; }
+    .file-tag-perf { background: #e3f2fd; color: #1565c0; }
+    
     div[data-testid="stTextInput"] input {
         font-size: 1.3rem !important; padding: 15px !important; height: 55px !important;
         background-color: #ffffff !important; color: #191f28 !important; border: 1px solid #e5e8eb !important; border-radius: 12px !important; box-shadow: 0 4px 10px rgba(0,0,0,0.02);
@@ -222,7 +311,6 @@ st.markdown("""
     div[data-testid="stSelectbox"] > div { background-color: #ffffff !important; border: 1px solid #e5e8eb !important; border-radius: 12px !important; }
     div[data-testid="stSelectbox"] * { font-size: 1.1rem !important; }
     
-    /* 버튼 */
     div.stButton > button[kind="primary"] {
         font-size: 1.4rem !important; font-weight: 800 !important; height: 60px !important;
         border-radius: 12px !important; background-color: rgb(128, 0, 0) !important; color: white !important; border: none !important; width: 100%; margin-top: 10px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(128, 0, 0, 0.2) !important;
@@ -238,9 +326,6 @@ st.markdown("""
         height: 40px !important; font-size: 1rem !important; margin-top: 0 !important; box-shadow: none !important;
     }
 
-    /* ========================================= */
-    /* 🌙 다크 모드 (Dark Mode) CSS              */
-    /* ========================================= */
     @media (prefers-color-scheme: dark) {
         [data-testid="stAppViewContainer"] { background-color: #121212 !important; color: #e0e0e0 !important; }
         label, p, .stMarkdown p { color: #e0e0e0 !important; }
@@ -287,33 +372,39 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ⚙️ 공통 함수 (데이터 계산)
+# ⚙️ 공통 함수 (데이터 계산) — 병합 데이터 사용
 # ==========================================
+def _get_merged_df(cfg_index):
+    """병합된 DataFrame을 가져옴. 없으면 raw_data에서 fallback."""
+    merged = st.session_state.get('merged_data', {})
+    if cfg_index in merged:
+        return merged[cfg_index]
+    # fallback: raw_data에서 직접 가져오기
+    cfg = st.session_state['config'][cfg_index]
+    file_info = cfg.get('file_info') or cfg.get('file', '')
+    return st.session_state['raw_data'].get(file_info)
+
 def _read_prize_items(cfg, match_df):
-    """설정에서 시상금 항목들을 읽어 [{label, amount, eligible}] 리스트 반환.
-    지급률(col_eligible)=0이면 미대상으로 제외, 그 외 값이면 대상으로 포함. 공란이면 무조건 포함."""
+    """설정에서 시상금 항목들을 읽어 [{label, amount, eligible}] 리스트 반환."""
     prize_details = []
     items = cfg.get('prize_items', [])
     if items:
         for item in items:
-            col_prize = item.get('col_prize', '') or item.get('col', '')  # 구형 호환
+            col_prize = item.get('col_prize', '') or item.get('col', '')
             label = item.get('label', '')
             if not col_prize or col_prize not in match_df.columns:
                 continue
             
-            # 대상 여부 확인
             col_elig = item.get('col_eligible', '')
             if col_elig and col_elig in match_df.columns:
                 elig_val = safe_float(match_df[col_elig].values[0])
                 if elig_val == 0:
-                    # 미대상 (100 등) → 이 항목 건너뜀
                     continue
             
             raw = match_df[col_prize].values[0]
             amt = safe_float(raw)
             prize_details.append({"label": label or col_prize, "amount": amt})
     else:
-        # 구형 호환: col_prize 단일 컬럼
         col_prize = cfg.get('col_prize', '')
         if col_prize and col_prize in match_df.columns:
             raw = match_df[col_prize].values[0]
@@ -325,13 +416,12 @@ def _read_prize_items(cfg, match_df):
 def calculate_agent_performance(target_code):
     calculated_results = []
     
-    for cfg in st.session_state['config']:
-        df = st.session_state['raw_data'].get(cfg['file'])
+    for cfg_idx, cfg in enumerate(st.session_state['config']):
+        df = _get_merged_df(cfg_idx)
         if df is None: continue
         col_code = cfg.get('col_code', '')
         if not col_code or col_code not in df.columns: continue
         
-        # 🌟 속도 개선: 캐싱된 컬럼에서 즉시 비교 🌟
         clean_codes = get_clean_series(df, col_code)
         match_df = df[clean_codes == safe_str(target_code)]
         if match_df.empty: continue
@@ -339,13 +429,12 @@ def calculate_agent_performance(target_code):
         cat = cfg.get('category', 'weekly')
         p_type = cfg.get('type', '구간 시책')
         
-        # 🌟 시상금 여러 항목 읽기
         prize_details = _read_prize_items(cfg, match_df)
         prize = sum(d['amount'] for d in prize_details)
         
         if cat == 'weekly':
             if "1기간" in p_type: 
-                if not prize_details: continue  # 미대상 → 항목 자체 미표시
+                if not prize_details: continue
                 raw_prev = match_df[cfg['col_val_prev']].values[0] if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
                 raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
                 val_prev = safe_float(raw_prev)
@@ -386,7 +475,7 @@ def calculate_agent_performance(target_code):
                 })
 
             else: 
-                if not prize_details: continue  # 미대상 → 항목 자체 미표시
+                if not prize_details: continue
                 raw_val = match_df[cfg['col_val']].values[0] if cfg.get('col_val') and cfg['col_val'] in df.columns else 0
                 val = safe_float(raw_val)
                 
@@ -396,7 +485,7 @@ def calculate_agent_performance(target_code):
                 })
         
         elif cat == 'cumulative':
-            if not prize_details: continue  # 미대상 → 항목 자체 미표시
+            if not prize_details: continue
             col_val = cfg.get('col_val', '')
             raw_val = match_df[col_val].values[0] if col_val and col_val in match_df.columns else 0
             val = safe_float(raw_val)
@@ -446,7 +535,6 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
             desc_html = res['desc'].replace('\n', '<br>') if res.get('desc') else ''
             details = res.get('prize_details', [])
             
-            # 시상금 상세 HTML 생성
             prize_detail_html = ""
             if len(details) > 1:
                 for d in details:
@@ -542,10 +630,23 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
             )
         st.markdown(stack_html, unsafe_allow_html=True)
 
-    # 🌟 [수정된 부분] 텍스트 박스 대신 카카오톡 원클릭 복사 버튼 렌더링
     if show_share_text:
         st.markdown("<h4 class='main-title' style='margin-top:10px;'>💬 카카오톡 바로 공유하기</h4>", unsafe_allow_html=True)
         copy_btn_component(share_text)
+
+
+# ==========================================
+# ⚙️ 관리자 UI 헬퍼: 파일별 컬럼 목록 가져오기
+# ==========================================
+def _get_cols_for_file(file_name):
+    """특정 파일의 컬럼 목록 반환"""
+    df = st.session_state['raw_data'].get(file_name)
+    if df is not None:
+        return [c for c in df.columns.tolist() if not c.startswith('_clean_')]
+    return []
+
+def _get_idx(val, opts):
+    return opts.index(val) if val in opts else 0
 
 
 # ==========================================
@@ -571,11 +672,10 @@ if mode == "👥 매니저 관리":
                 safe_input_code = safe_str(mgr_code)
                 all_valid_codes = set()
                 
-                # 🌟 속도 개선: 캐싱된 컬럼에서 검증 수행 🌟
-                for cfg in st.session_state['config']:
+                for cfg_idx, cfg in enumerate(st.session_state['config']):
                     mgr_col = cfg.get('col_manager_code', '') or cfg.get('col_manager', '')
                     if mgr_col:
-                        df = st.session_state['raw_data'].get(cfg['file'])
+                        df = _get_merged_df(cfg_idx)
                         if df is not None and mgr_col in df.columns:
                             clean_mgr_codes = get_clean_series(df, mgr_col)
                             for clean_val in clean_mgr_codes.unique():
@@ -588,7 +688,6 @@ if mode == "👥 매니저 관리":
                     st.session_state.mgr_logged_in = True
                     st.session_state.mgr_code = safe_input_code 
                     st.session_state.mgr_step = 'main'
-                    # 🌟 [로그 저장] 매니저 로그인 기록 🌟
                     save_log("매니저", safe_input_code, "MANAGER_LOGIN")
                     st.rerun()
                 else:
@@ -596,7 +695,7 @@ if mode == "👥 매니저 관리":
                     st.info("💡 관리자 화면에서 '지원매니저코드 컬럼'이 정확히 지정되었는지 확인해주세요.")
                     if all_valid_codes:
                         sample_codes = ", ".join(list(all_valid_codes)[:10])
-                        st.warning(f"🧐 (참고) 현재 시스템이 복원하여 인식하고 있는 정상 코드 예시:\n{sample_codes}")
+                        st.warning(f"🧐 (참고) 현재 시스템이 인식하고 있는 정상 코드 예시:\n{sample_codes}")
     else:
         if st.button("🚪 로그아웃"):
             st.session_state.mgr_logged_in = False
@@ -605,7 +704,6 @@ if mode == "👥 매니저 관리":
         
         step = st.session_state.get('mgr_step', 'main')
         
-        # --- (1) 메인 폴더 선택 ---
         if step == 'main':
             st.markdown("<h3 class='main-title'>어떤 실적을 확인하시겠습니까?</h3>", unsafe_allow_html=True)
             col1, col2 = st.columns(2)
@@ -620,26 +718,23 @@ if mode == "👥 매니저 관리":
                     st.session_state.mgr_category = '브릿지'
                     st.rerun()
                 
-        # --- (2) 금액별 폴더 선택 ---
         elif step == 'tiers':
             if st.button("⬅️ 뒤로가기", use_container_width=False):
                 st.session_state.mgr_step = 'main'
                 st.rerun()
             
             cat = st.session_state.mgr_category
-            
             my_agents = set()
             safe_login_code = st.session_state.mgr_code
             
-            # 🌟 속도 개선: 캐싱된 컬럼 필터링으로 0.1초 만에 인원 수집 🌟
-            for cfg in st.session_state['config']:
+            for cfg_idx, cfg in enumerate(st.session_state['config']):
                 if cfg.get('category') == 'cumulative': continue
                 
                 mgr_col = cfg.get('col_manager_code', '') or cfg.get('col_manager', '')
                 col_code = cfg.get('col_code', '')
                 if not mgr_col or not col_code: continue 
                 
-                df = st.session_state['raw_data'].get(cfg['file'])
+                df = _get_merged_df(cfg_idx)
                 if df is None or mgr_col not in df.columns or col_code not in df.columns: continue
                 
                 clean_mgr_codes = get_clean_series(df, mgr_col)
@@ -691,7 +786,6 @@ if mode == "👥 매니저 관리":
                     st.session_state.mgr_agents = my_agents 
                     st.rerun()
                 
-        # --- (3) 선택한 폴더 내 설계사 명단 확인 (가나다 정렬 적용) ---
         elif step == 'list':
             if st.button("⬅️ 폴더로 돌아가기", use_container_width=False):
                 st.session_state.mgr_step = 'tiers'
@@ -714,10 +808,9 @@ if mode == "👥 매니저 관리":
                 
                 agent_name = "이름없음"
                 agent_agency = ""
-                # 🌟 속도 개선: 데이터 조회 시 캐싱 컬럼(clean_col_codes) 사용 🌟
-                for cfg in st.session_state['config']:
+                for cfg_idx, cfg in enumerate(st.session_state['config']):
                     if cfg.get('col_code') and cfg.get('col_name'):
-                        df = st.session_state['raw_data'].get(cfg['file'])
+                        df = _get_merged_df(cfg_idx)
                         if df is not None and cfg['col_code'] in df.columns:
                             clean_col_codes = get_clean_series(df, cfg['col_code'])
                             mask = clean_col_codes == code
@@ -726,8 +819,8 @@ if mode == "👥 매니저 관리":
                             if not match_df.empty:
                                 if cfg['col_name'] in match_df.columns:
                                     agent_name = safe_str(match_df[cfg['col_name']].values[0])
-                                br = cfg.get('col_branch','')
                                 ag = cfg.get('col_agency','')
+                                br = cfg.get('col_branch','')
                                 if ag and ag in df.columns: agent_agency = _clean_excel_text(safe_str(match_df[ag].values[0]))
                                 elif br and br in df.columns: agent_agency = _clean_excel_text(safe_str(match_df[br].values[0]))
                                 break
@@ -746,7 +839,6 @@ if mode == "👥 매니저 관리":
             if not near_agents:
                 st.info(f"해당 구간에 소속 설계사가 없습니다.")
             else:
-                # 🌟 [요청 사항 적용] 지사명(agency) 가나다순, 이름(name) 가나다순 정렬 🌟
                 near_agents.sort(key=lambda x: (x[2], x[1]))
                 
                 for code, name, agency, val in near_agents:
@@ -757,7 +849,6 @@ if mode == "👥 매니저 관리":
                         st.session_state.mgr_step = 'detail'
                         st.rerun()
 
-        # --- (4) 상세 내역 및 카톡 공유 ---
         elif step == 'detail':
             if st.button("⬅️ 명단으로 돌아가기", use_container_width=False):
                 st.session_state.mgr_step = 'list'
@@ -786,7 +877,6 @@ elif mode == "⚙️ 시스템 관리자":
     
     admin_pw = st.text_input("관리자 비밀번호를 입력하세요", type="password")
     
-    # 🌟 [보안 로직 추가] 시크릿 키로 비밀번호 확인, 설정되지 않은 경우 기본 비밀번호 사용
     try:
         real_pw = st.secrets["admin_password"]
     except:
@@ -798,7 +888,6 @@ elif mode == "⚙️ 시스템 관리자":
         
     st.success("인증 성공! 변경 사항은 가장 아래 [서버에 반영하기] 버튼을 눌러야 저장됩니다.")
 
-    # 🌟 [로그 다운로드 버튼 추가]
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "rb") as f:
             st.download_button(
@@ -813,7 +902,8 @@ elif mode == "⚙️ 시스템 관리자":
     # [영역 1] 파일 업로드 및 관리
     # ---------------------------------------------------------
     st.markdown("<h3 class='sub-title'>📂 1. 실적 파일 업로드 및 관리</h3>", unsafe_allow_html=True)
-    uploaded_files = st.file_uploader("CSV/엑셀 파일 업로드", accept_multiple_files=True, type=['csv', 'xlsx'])
+    st.info("💡 인적사항 파일과 실적/시상 파일을 각각 업로드하세요. 같은 파일이면 1개만 업로드해도 됩니다.")
+    uploaded_files = st.file_uploader("CSV/엑셀 파일 업로드 (여러 파일 가능)", accept_multiple_files=True, type=['csv', 'xlsx'])
     
     if uploaded_files:
         new_upload = False
@@ -832,7 +922,6 @@ elif mode == "⚙️ 시스템 관리자":
                                 df = pd.read_csv(file, sep='\t', encoding='cp949')
                 else: df = pd.read_excel(file)
                 
-                # 🌟 엑셀 _xHHHH_ 이스케이프 일괄 정리
                 df.columns = [_clean_excel_text(str(c)) for c in df.columns]
                 for col in df.select_dtypes(include='object').columns:
                     df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
@@ -851,6 +940,7 @@ elif mode == "⚙️ 시스템 관리자":
     with col2:
         if st.button("🗑️ 전체 파일 삭제", use_container_width=True):
             st.session_state['raw_data'].clear()
+            st.session_state['merged_data'] = {}
             for f in os.listdir(DATA_DIR):
                 if f.endswith('.pkl'): os.remove(os.path.join(DATA_DIR, f))
             st.rerun()
@@ -859,8 +949,11 @@ elif mode == "⚙️ 시스템 관리자":
         st.info("현재 업로드된 파일이 없습니다. 위에 파일을 추가해주세요.")
     else:
         for file_name in list(st.session_state['raw_data'].keys()):
-            col_name, col_btn = st.columns([8, 2])
-            with col_name: st.write(f"📄 {file_name}")
+            df_preview = st.session_state['raw_data'][file_name]
+            col_count = len([c for c in df_preview.columns if not c.startswith('_clean_')])
+            row_count = len(df_preview)
+            col_name_disp, col_btn = st.columns([8, 2])
+            with col_name_disp: st.write(f"📄 {file_name} ({row_count}행 × {col_count}열)")
             with col_btn:
                 if st.button("개별 삭제", key=f"del_file_{file_name}", use_container_width=True):
                     del st.session_state['raw_data'][file_name]
@@ -870,7 +963,7 @@ elif mode == "⚙️ 시스템 관리자":
             st.markdown("<hr style='margin:5px 0; opacity:0.1;'>", unsafe_allow_html=True)
 
     # ---------------------------------------------------------
-    # 🌟 [영역 2] 주차/브릿지 시상 항목 관리
+    # 🌟 [영역 2] 주차/브릿지 시상 항목 관리 — 듀얼 파일 지원
     # ---------------------------------------------------------
     st.divider()
     st.markdown("<h3 class='sub-title' style='margin-top:10px;'>🏆 2. 주차/브릿지 시상 항목 관리</h3>", unsafe_allow_html=True)
@@ -885,7 +978,9 @@ elif mode == "⚙️ 시스템 관리자":
                 st.session_state['config'].append({
                     "name": f"신규 주차 시책 {len(st.session_state['config'])+1}",
                     "desc": "", "category": "weekly", "type": "구간 시책", 
-                    "file": first_file, "col_name": "", "col_code": "", "col_branch": "", "col_manager_code": "",
+                    "file_info": first_file, "file_perf": first_file,
+                    "col_code_perf": "",
+                    "col_name": "", "col_code": "", "col_branch": "", "col_agency": "", "col_manager_code": "",
                     "col_val": "", "col_val_prev": "", "col_val_curr": "",
                     "prize_items": [{"label": "시상금", "col_eligible": "", "col_prize": ""}],
                     "curr_req": 100000.0,
@@ -904,8 +999,16 @@ elif mode == "⚙️ 시스템 관리자":
     if not weekly_cfgs:
         st.info("현재 설정된 주차/브릿지 시상이 없습니다.")
 
+    file_opts = list(st.session_state['raw_data'].keys())
+    
     for i, cfg in weekly_cfgs:
         if 'desc' not in cfg: cfg['desc'] = ""
+        # 구형 호환
+        if 'file_info' not in cfg:
+            cfg['file_info'] = cfg.get('file', file_opts[0] if file_opts else '')
+            cfg['file_perf'] = cfg.get('file', file_opts[0] if file_opts else '')
+            cfg['col_code_perf'] = cfg.get('col_code', '')
+        
         st.markdown(f"<div class='config-box'>", unsafe_allow_html=True)
         c_title, c_del = st.columns([8, 2])
         with c_title: st.markdown(f"<h3 class='config-title'>📌 {cfg['name']} 설정</h3>", unsafe_allow_html=True)
@@ -923,32 +1026,69 @@ elif mode == "⚙️ 시스템 관리자":
             
         cfg['type'] = st.radio("시책 종류 선택", ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 차월 달성 조건)"], index=idx, horizontal=True, key=f"type_{i}")
         
+        # ===== 🌟 듀얼 파일 선택 영역 =====
+        st.markdown("---")
+        st.markdown("**📂 파일 및 컬럼 매핑 설정**")
+        
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            st.markdown("<span class='file-tag file-tag-info'>인적사항 파일</span>", unsafe_allow_html=True)
+            cfg['file_info'] = st.selectbox(
+                "인적사항 파일 (성명/사번/지점/매니저)", file_opts,
+                index=_get_idx(cfg.get('file_info', ''), file_opts) if file_opts else 0,
+                key=f"finfo_{i}"
+            )
+        with fc2:
+            st.markdown("<span class='file-tag file-tag-perf'>실적/시상 파일</span>", unsafe_allow_html=True)
+            cfg['file_perf'] = st.selectbox(
+                "실적/시상 파일 (실적수치/시상금)", file_opts,
+                index=_get_idx(cfg.get('file_perf', ''), file_opts) if file_opts else 0,
+                key=f"fperf_{i}"
+            )
+        
+        cols_info = _get_cols_for_file(cfg['file_info'])
+        cols_perf = _get_cols_for_file(cfg['file_perf'])
+        
+        # 두 파일이 다를 때 병합 키 설정
+        if cfg['file_info'] != cfg['file_perf']:
+            st.markdown("**🔗 병합 기준 설정** (두 파일을 연결할 코드 컬럼)")
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                st.caption("↑ 인적사항 파일의 사번 컬럼")
+                # col_code가 병합 키 역할 (인적사항 파일)
+            with mc2:
+                cfg['col_code_perf'] = st.selectbox(
+                    "실적 파일의 사번(코드) 컬럼", cols_perf,
+                    index=_get_idx(cfg.get('col_code_perf', ''), cols_perf),
+                    key=f"ccode_perf_{i}"
+                )
+        else:
+            cfg['col_code_perf'] = cfg.get('col_code', '')
+        
         col1, col2 = st.columns(2)
         with col1:
-            file_opts = list(st.session_state['raw_data'].keys())
-            cfg['file'] = st.selectbox(f"대상 파일", file_opts, index=file_opts.index(cfg['file']) if cfg['file'] in file_opts else 0, key=f"file_{i}")
-            cols = st.session_state['raw_data'][cfg['file']].columns.tolist() if file_opts else []
-            def get_idx(val, opts): return opts.index(val) if val in opts else 0
-
-            st.info("💡 식별을 위해 아래 컬럼들을 지정해주세요.")
-            cfg['col_name'] = st.selectbox("성명 컬럼", cols, index=get_idx(cfg.get('col_name', ''), cols), key=f"cname_{i}")
-            cfg['col_branch'] = st.selectbox("지점명(조직) 컬럼", cols, index=get_idx(cfg.get('col_branch', ''), cols), key=f"cbranch_{i}")
-            cfg['col_agency'] = st.selectbox("대리점/지사명 컬럼", cols, index=get_idx(cfg.get('col_agency', ''), cols), key=f"cagency_{i}")
-            cfg['col_code'] = st.selectbox("설계사코드(사번) 컬럼", cols, index=get_idx(cfg.get('col_code', ''), cols), key=f"ccode_{i}")
-            cfg['col_manager_code'] = st.selectbox("지원매니저코드 컬럼", cols, index=get_idx(cfg.get('col_manager_code', cfg.get('col_manager', '')), cols), key=f"cmgrcode_{i}")
+            st.markdown(f"<span class='file-tag file-tag-info'>인적사항 파일</span> 컬럼 지정", unsafe_allow_html=True)
+            cfg['col_name'] = st.selectbox("성명 컬럼", cols_info, index=_get_idx(cfg.get('col_name', ''), cols_info), key=f"cname_{i}")
+            cfg['col_branch'] = st.selectbox("지점명(조직) 컬럼", cols_info, index=_get_idx(cfg.get('col_branch', ''), cols_info), key=f"cbranch_{i}")
+            cfg['col_agency'] = st.selectbox("대리점/지사명 컬럼", cols_info, index=_get_idx(cfg.get('col_agency', ''), cols_info), key=f"cagency_{i}")
+            cfg['col_code'] = st.selectbox("설계사코드(사번) 컬럼", cols_info, index=_get_idx(cfg.get('col_code', ''), cols_info), key=f"ccode_{i}")
+            cfg['col_manager_code'] = st.selectbox("지원매니저코드 컬럼", cols_info, index=_get_idx(cfg.get('col_manager_code', cfg.get('col_manager', '')), cols_info), key=f"cmgrcode_{i}")
+            
+            # 동일 파일이면 col_code_perf 자동 동기화
+            if cfg['file_info'] == cfg['file_perf']:
+                cfg['col_code_perf'] = cfg['col_code']
             
         with col2:
-            st.info("💡 실적과 시상금 컬럼을 지정해주세요.")
+            st.markdown(f"<span class='file-tag file-tag-perf'>실적/시상 파일</span> 컬럼 지정", unsafe_allow_html=True)
             if "1기간" in cfg['type']:
-                cfg['col_val_prev'] = st.selectbox("전월 실적 컬럼", cols, index=get_idx(cfg.get('col_val_prev', ''), cols), key=f"cvalp_{i}")
-                cfg['col_val_curr'] = st.selectbox("당월 실적 컬럼", cols, index=get_idx(cfg.get('col_val_curr', ''), cols), key=f"cvalc_{i}")
+                cfg['col_val_prev'] = st.selectbox("전월 실적 컬럼", cols_perf, index=_get_idx(cfg.get('col_val_prev', ''), cols_perf), key=f"cvalp_{i}")
+                cfg['col_val_curr'] = st.selectbox("당월 실적 컬럼", cols_perf, index=_get_idx(cfg.get('col_val_curr', ''), cols_perf), key=f"cvalc_{i}")
             elif "2기간" in cfg['type']:
-                cfg['col_val_curr'] = st.selectbox("당월 실적 수치 컬럼", cols, index=get_idx(cfg.get('col_val_curr', ''), cols), key=f"cvalc2_{i}")
+                cfg['col_val_curr'] = st.selectbox("당월 실적 수치 컬럼", cols_perf, index=_get_idx(cfg.get('col_val_curr', ''), cols_perf), key=f"cvalc2_{i}")
             else: 
-                cfg['col_val'] = st.selectbox("실적 수치 컬럼", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
+                cfg['col_val'] = st.selectbox("실적 수치 컬럼", cols_perf, index=_get_idx(cfg.get('col_val', ''), cols_perf), key=f"cval_{i}")
             
             if "2기간" in cfg['type']:
-                # 🌟 브릿지2: 기존 구간/지급률 계산 유지
                 cfg['curr_req'] = st.number_input("차월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{i}")
                 st.write("📈 구간 설정 (달성금액, 지급률%)")
                 tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
@@ -964,20 +1104,18 @@ elif mode == "⚙️ 시스템 관리자":
                     st.error("형식이 올바르지 않습니다.")
                 st.caption("💡 브릿지 2기간은 (확보구간 + 차월가동금액) × 지급률로 계산됩니다.")
             else:
-                # 🌟 구간/브릿지1: 시상금 다중 항목 직접 읽기
                 st.markdown("**💰 시상금 항목 (여러 개 가능)**")
                 st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
                 if 'prize_items' not in cfg:
                     old_col = cfg.pop('col_prize', '') or cfg.pop('col', '')
                     cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
-                # 구형 호환: col → col_prize
                 for _pi in cfg.get('prize_items', []):
                     if 'col' in _pi and 'col_prize' not in _pi:
                         _pi['col_prize'] = _pi.pop('col', '')
                     if 'col_eligible' not in _pi:
                         _pi['col_eligible'] = ''
                 
-                cols_with_blank = ["(공란)"] + cols
+                cols_perf_with_blank = ["(공란)"] + cols_perf
                 updated_items = []
                 for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
                     st.markdown(f"<div style='background:#f8f9fa;padding:6px 8px;border-radius:6px;margin:4px 0;'>", unsafe_allow_html=True)
@@ -991,13 +1129,13 @@ elif mode == "⚙️ 시스템 관리자":
                     pc2, pc3 = st.columns(2)
                     with pc2:
                         cur_elig = pi.get('col_eligible', '')
-                        elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
-                        sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_with_blank, index=elig_idx, key=f"pielig_{i}_{pi_idx}")
+                        elig_idx = cols_perf_with_blank.index(cur_elig) if cur_elig in cols_perf_with_blank else 0
+                        sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_perf_with_blank, index=elig_idx, key=f"pielig_{i}_{pi_idx}")
                         pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
                     with pc3:
                         cur_prize = pi.get('col_prize', '')
-                        prize_idx = cols_with_blank.index(cur_prize) if cur_prize in cols_with_blank else 0
-                        sel_prize = st.selectbox("예정시상금 컬럼", cols_with_blank, index=prize_idx, key=f"piprz_{i}_{pi_idx}")
+                        prize_idx = cols_perf_with_blank.index(cur_prize) if cur_prize in cols_perf_with_blank else 0
+                        sel_prize = st.selectbox("예정시상금 컬럼", cols_perf_with_blank, index=prize_idx, key=f"piprz_{i}_{pi_idx}")
                         pi['col_prize'] = sel_prize if sel_prize != "(공란)" else ""
                     st.markdown("</div>", unsafe_allow_html=True)
                     updated_items.append(pi)
@@ -1009,7 +1147,7 @@ elif mode == "⚙️ 시스템 관리자":
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------------------------------------------------------
-    # 🌟 [영역 3] 월간 누계 시상 항목 관리
+    # 🌟 [영역 3] 월간 누계 시상 항목 관리 — 듀얼 파일 지원
     # ---------------------------------------------------------
     st.divider()
     st.markdown("<h3 class='blue-title'>📈 3. 월간 누계 시상 항목 관리</h3>", unsafe_allow_html=True)
@@ -1022,7 +1160,8 @@ elif mode == "⚙️ 시스템 관리자":
             st.session_state['config'].append({
                 "name": f"신규 누계 항목 {len(st.session_state['config'])+1}",
                 "desc": "", "category": "cumulative", "type": "누계", 
-                "file": first_file, "col_code": "", "col_val": "",
+                "file_info": first_file, "file_perf": first_file,
+                "col_code": "", "col_code_perf": "", "col_val": "",
                 "prize_items": [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
             })
             st.rerun()
@@ -1032,6 +1171,12 @@ elif mode == "⚙️ 시스템 관리자":
         st.info("현재 설정된 누계 항목이 없습니다.")
 
     for i, cfg in cumul_cfgs:
+        # 구형 호환
+        if 'file_info' not in cfg:
+            cfg['file_info'] = cfg.get('file', file_opts[0] if file_opts else '')
+            cfg['file_perf'] = cfg.get('file', file_opts[0] if file_opts else '')
+            cfg['col_code_perf'] = cfg.get('col_code', '')
+        
         st.markdown(f"<div class='config-box-blue'>", unsafe_allow_html=True)
         c_title, c_del = st.columns([8, 2])
         with c_title: st.markdown(f"<h3 class='config-title' style='color:#1e3c72;'>📘 {cfg['name']} 설정</h3>", unsafe_allow_html=True)
@@ -1042,20 +1187,51 @@ elif mode == "⚙️ 시스템 관리자":
         
         cfg['name'] = st.text_input(f"누계 항목명", value=cfg['name'], key=f"name_{i}")
         
+        # ===== 🌟 듀얼 파일 선택 영역 =====
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            st.markdown("<span class='file-tag file-tag-info'>인적사항 파일</span>", unsafe_allow_html=True)
+            cfg['file_info'] = st.selectbox(
+                "인적사항 파일", file_opts,
+                index=_get_idx(cfg.get('file_info', ''), file_opts) if file_opts else 0,
+                key=f"cfinfo_{i}"
+            )
+        with fc2:
+            st.markdown("<span class='file-tag file-tag-perf'>실적/시상 파일</span>", unsafe_allow_html=True)
+            cfg['file_perf'] = st.selectbox(
+                "실적/시상 파일", file_opts,
+                index=_get_idx(cfg.get('file_perf', ''), file_opts) if file_opts else 0,
+                key=f"cfperf_{i}"
+            )
+        
+        cols_info = _get_cols_for_file(cfg['file_info'])
+        cols_perf = _get_cols_for_file(cfg['file_perf'])
+        
+        if cfg['file_info'] != cfg['file_perf']:
+            st.markdown("**🔗 병합 기준 설정**")
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                st.caption("↑ 인적사항 파일의 사번 컬럼 (아래에서 선택)")
+            with mc2:
+                cfg['col_code_perf'] = st.selectbox(
+                    "실적 파일의 사번(코드) 컬럼", cols_perf,
+                    index=_get_idx(cfg.get('col_code_perf', ''), cols_perf),
+                    key=f"ccodeperf_c_{i}"
+                )
+        
         col1, col2 = st.columns(2)
         with col1:
-            file_opts = list(st.session_state['raw_data'].keys())
-            cfg['file'] = st.selectbox(f"대상 파일", file_opts, index=file_opts.index(cfg['file']) if cfg['file'] in file_opts else 0, key=f"file_{i}")
-            cols = st.session_state['raw_data'][cfg['file']].columns.tolist() if file_opts else []
-            def get_idx(val, opts): return opts.index(val) if val in opts else 0
-
-            cfg['col_code'] = st.selectbox("설계사코드(사번) 컬럼", cols, index=get_idx(cfg.get('col_code', ''), cols), key=f"ccode_{i}")
-            cfg['col_val'] = st.selectbox("누계 실적 컬럼 (선택사항)", cols, index=get_idx(cfg.get('col_val', ''), cols), key=f"cval_{i}")
+            st.markdown(f"<span class='file-tag file-tag-info'>인적사항 파일</span>", unsafe_allow_html=True)
+            cfg['col_code'] = st.selectbox("설계사코드(사번) 컬럼", cols_info, index=_get_idx(cfg.get('col_code', ''), cols_info), key=f"ccode_{i}")
+            
+            if cfg['file_info'] == cfg['file_perf']:
+                cfg['col_code_perf'] = cfg['col_code']
+            
+            cfg['col_val'] = st.selectbox("누계 실적 컬럼 (선택사항)", cols_perf, index=_get_idx(cfg.get('col_val', ''), cols_perf), key=f"cval_{i}")
 
         with col2:
-            st.markdown("**💰 시상금 항목 (여러 개 가능)**")
+            st.markdown(f"<span class='file-tag file-tag-perf'>실적/시상 파일</span> 시상금 항목", unsafe_allow_html=True)
             st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
-            # 구형 호환
             if 'prize_items' not in cfg:
                 old_col = cfg.pop('col_prize', '')
                 cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
@@ -1065,7 +1241,7 @@ elif mode == "⚙️ 시스템 관리자":
                 if 'col_eligible' not in _pi:
                     _pi['col_eligible'] = ''
             
-            cols_with_blank = ["(공란)"] + cols
+            cols_perf_with_blank = ["(공란)"] + cols_perf
             updated_items = []
             for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
                 st.markdown(f"<div style='background:#f0f4ff;padding:6px 8px;border-radius:6px;margin:4px 0;'>", unsafe_allow_html=True)
@@ -1079,13 +1255,13 @@ elif mode == "⚙️ 시스템 관리자":
                 pc2, pc3 = st.columns(2)
                 with pc2:
                     cur_elig = pi.get('col_eligible', '')
-                    elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
-                    sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_with_blank, index=elig_idx, key=f"cpielig_{i}_{pi_idx}")
+                    elig_idx = cols_perf_with_blank.index(cur_elig) if cur_elig in cols_perf_with_blank else 0
+                    sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_perf_with_blank, index=elig_idx, key=f"cpielig_{i}_{pi_idx}")
                     pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
                 with pc3:
                     cur_prize = pi.get('col_prize', '')
-                    prize_idx = cols_with_blank.index(cur_prize) if cur_prize in cols_with_blank else 0
-                    sel_prize = st.selectbox("예정시상금 컬럼", cols_with_blank, index=prize_idx, key=f"cpiprz_{i}_{pi_idx}")
+                    prize_idx = cols_perf_with_blank.index(cur_prize) if cur_prize in cols_perf_with_blank else 0
+                    sel_prize = st.selectbox("예정시상금 컬럼", cols_perf_with_blank, index=prize_idx, key=f"cpiprz_{i}_{pi_idx}")
                     pi['col_prize'] = sel_prize if sel_prize != "(공란)" else ""
                 st.markdown("</div>", unsafe_allow_html=True)
                 updated_items.append(pi)
@@ -1152,10 +1328,13 @@ elif mode == "⚙️ 시스템 관리자":
             try:
                 restored_config = json.loads(restore_file.read().decode('utf-8'))
                 if isinstance(restored_config, list):
-                    # 호환성 보장
                     for c in restored_config:
                         if 'category' not in c:
                             c['category'] = 'weekly'
+                        if 'file_info' not in c and 'file' in c:
+                            c['file_info'] = c['file']
+                            c['file_perf'] = c['file']
+                            c['col_code_perf'] = c.get('col_code', '')
                     
                     weekly_count = sum(1 for c in restored_config if c.get('category') == 'weekly')
                     cumul_count = sum(1 for c in restored_config if c.get('category') == 'cumulative')
@@ -1166,6 +1345,11 @@ elif mode == "⚙️ 시스템 관리자":
                         st.session_state['config'] = restored_config
                         with open(os.path.join(DATA_DIR, 'config.json'), 'w', encoding='utf-8') as f:
                             json.dump(restored_config, f, ensure_ascii=False)
+                        # 병합 데이터 재빌드
+                        st.session_state['merged_data'] = build_merged_data(
+                            restored_config, st.session_state['raw_data']
+                        )
+                        save_merged_to_disk(st.session_state['merged_data'])
                         st.success("✅ 설정이 복원되었습니다!")
                         st.rerun()
                 else:
@@ -1176,16 +1360,29 @@ elif mode == "⚙️ 시스템 관리자":
                 st.error(f"❌ 복원 중 오류 발생: {str(e)}")
 
     # ---------------------------------------------------------
-    # [최종] 서버 반영 및 기존 다운로드
+    # [최종] 서버 반영 — 🌟 저장 시 사전 병합(Pre-Merge) 실행
     # ---------------------------------------------------------
     if st.session_state['config']:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("✅ 모든 설정 완료 및 서버에 반영하기", type="primary", use_container_width=True):
+            # 1. config.json 저장
             with open(os.path.join(DATA_DIR, 'config.json'), 'w', encoding='utf-8') as f:
                 json.dump(st.session_state['config'], f, ensure_ascii=False)
-            st.success("✅ 서버에 영구 반영되었습니다! 이제 조회 화면에서 확인 가능합니다.")
+            
+            # 2. 🌟 사전 병합 실행 및 디스크 저장
+            st.session_state['merged_data'] = build_merged_data(
+                st.session_state['config'], st.session_state['raw_data']
+            )
+            save_merged_to_disk(st.session_state['merged_data'])
+            
+            merge_count = len(st.session_state['merged_data'])
+            dual_count = sum(1 for c in st.session_state['config'] 
+                          if c.get('file_info', '') != c.get('file_perf', '') 
+                          and c.get('file_info') and c.get('file_perf'))
+            
+            st.success(f"✅ 서버에 영구 반영 완료! (병합된 데이터셋 {merge_count}개, 이 중 듀얼파일 병합 {dual_count}개)")
+            st.info("💡 사전 병합(Pre-Merge) 완료 → 설계사 조회 시 빠른 속도로 응답합니다.")
 
-        # --- 📥 config.json 다운로드 (관리자 전용 — 지원매니저 앱으로 내보내기) ---
         config_path = os.path.join(DATA_DIR, 'config.json')
         if os.path.exists(config_path):
             st.divider()
@@ -1199,7 +1396,7 @@ elif mode == "⚙️ 시스템 관리자":
             )
 
 # ==========================================
-# 🏆 4. 사용자 모드 (일반 설계사 조회)
+# 🏆 4. 사용자 모드 (일반 설계사 조회) — 병합 데이터 사용
 # ==========================================
 else:
     st.markdown('<div class="title-band">메리츠화재 시상 현황</div>', unsafe_allow_html=True)
@@ -1212,10 +1409,10 @@ else:
     needs_disambiguation = False
 
     if user_name and branch_code_input:
-        for i, cfg in enumerate(st.session_state['config']):
+        for cfg_idx, cfg in enumerate(st.session_state['config']):
             if cfg.get('category') == 'cumulative': continue
                 
-            df = st.session_state['raw_data'].get(cfg['file'])
+            df = _get_merged_df(cfg_idx)
             if df is not None:
                 col_name = cfg.get('col_name', '')
                 col_branch = cfg.get('col_branch', '')
@@ -1265,10 +1462,9 @@ else:
             calc_results, total_prize = calculate_agent_performance(final_target_code)
             
             if calc_results:
-                # 🌟 대리점/지사명 조회
                 display_name = user_name
-                for cfg in st.session_state['config']:
-                    df = st.session_state['raw_data'].get(cfg.get('file'))
+                for cfg_idx, cfg in enumerate(st.session_state['config']):
+                    df = _get_merged_df(cfg_idx)
                     if df is None: continue
                     col_code = cfg.get('col_code', '')
                     col_agency = cfg.get('col_agency', '')
@@ -1282,7 +1478,6 @@ else:
                             display_name = f"{agency_val} {user_name}"
                         break
                 
-                # 🌟 [로그 저장] 일반 설계사 실적 조회 성공 시 기록 🌟
                 save_log(f"{user_name}({branch_code_input}지점)", final_target_code, "USER_SEARCH")
                 
                 render_ui_cards(display_name, calc_results, total_prize, show_share_text=False)
