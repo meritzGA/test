@@ -5,7 +5,7 @@ import numpy as np
 import re, io, os, pickle, shutil, json, sqlite3, base64
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="매니저 활동관리", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="매니저 활동지원", layout="wide", initial_sidebar_state="collapsed")
 st.markdown('<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,interactive-widget=overlays-content">', unsafe_allow_html=True)
 st.markdown("""<style>
 /* 모바일 키보드로 인한 레이아웃 변경 방지 */
@@ -458,7 +458,7 @@ init_db(); daily_backup()
 # =============================================================
 # 7. 사이드바
 # =============================================================
-st.sidebar.markdown("<div style='padding:6px 0 12px;'><span style='font-size:18px;font-weight:800;'>📋 활동관리</span></div>",unsafe_allow_html=True)
+st.sidebar.markdown("<div style='padding:6px 0 12px;'><span style='font-size:18px;font-weight:800;'>📋 활동지원</span></div>",unsafe_allow_html=True)
 try: MGR_PW=os.environ.get("MANAGER_PASSWORD","") or st.secrets.get("MANAGER_PASSWORD","meritz1!")
 except: MGR_PW=os.environ.get("MANAGER_PASSWORD","meritz1!")
 try: ADM_PW=os.environ.get("ADMIN_PASSWORD","") or st.secrets.get("ADMIN_PASSWORD","wolf7998")
@@ -579,7 +579,7 @@ if menu=="⚙️ 관리자 설정":
 elif menu=="📱 매니저 화면":
     st.session_state['admin_auth']=False
     if not has_data() or not st.session_state.get('manager_col'):
-        st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 활동관리</h1><p class='hero-sub'>관리자 설정 미완료</p></div>",unsafe_allow_html=True); st.stop()
+        st.markdown("<div class='hero-card'><h1 class='hero-name'>매니저 활동지원</h1><p class='hero-sub'>관리자 설정 미완료</p></div>",unsafe_allow_html=True); st.stop()
     df=st.session_state['df_merged'].copy()
     mc1=st.session_state['manager_col']; mc2=st.session_state.get('manager_col2','')
     mn_col=st.session_state.get('manager_name_col',mc1)
