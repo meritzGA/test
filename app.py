@@ -82,8 +82,9 @@ section[data-testid="stSidebar"] [data-testid="stButton-primary"]>button{
 .viewer-agent-name{font-size:1.3rem;font-weight:800;color:#800000;
   margin:.5rem 0 .2rem;padding-bottom:.5rem;border-bottom:2px solid #800000}
 .viewer-period-label{font-size:.95rem;font-weight:700;color:#333;margin:1rem 0 .5rem}
-.viewer-img-wrap{width:100%;margin-bottom:.8rem}
-.viewer-img-wrap img{width:100%;height:auto;display:block;border-radius:10px;
+.viewer-img-wrap{width:100%;margin-bottom:.8rem;display:flex;justify-content:center}
+.viewer-img-wrap img{max-height:88vh;max-width:100%;width:auto;height:auto;
+  object-fit:contain;display:block;border-radius:10px;
   box-shadow:0 2px 12px rgba(0,0,0,.08)}
 
 .stButton>button{border-radius:9px!important;font-weight:700!important}
