@@ -39,7 +39,7 @@ def save_data(data: dict):
 for k, v in {
     "all_data": None, "page": "viewer", "admin_auth": False,
     # 모바일 채팅 상태
-    "m_search": "", "m_agent": None, "m_period": None, "m_expanded": None,
+    "m_search": "", "m_agent": None, "m_period": None, "m_expanded": False,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -156,7 +156,7 @@ with st.sidebar:
         st.session_state.m_search = ""
         st.session_state.m_agent = None
         st.session_state.m_period = None
-        st.session_state.m_expanded = None
+        st.session_state.m_expanded = False
         st.rerun()
     if st.button("⚙️  관리자", use_container_width=True,
                  type="primary" if st.session_state.page == "admin" else "secondary"):
@@ -248,37 +248,6 @@ def page_viewer_mobile():
     all_data = st.session_state.all_data
     registered = [k for k, v in all_data.items() if isinstance(v, dict) and v.get("periods")]
 
-    # ── 확대 보기 모드 ─────────────────────────────────────────
-    if st.session_state.m_expanded is not None:
-        agent = st.session_state.m_agent
-        period = st.session_state.m_period
-        idx = st.session_state.m_expanded
-
-        if st.button("← 돌아가기", key="m_back_expand"):
-            st.session_state.m_expanded = None
-            st.rerun()
-
-        images = all_data.get(agent, {}).get("periods", {}).get(period, {}).get("images", [])
-        if 0 <= idx < len(images):
-            img_info = images[idx]
-            b64 = img_info["data"]
-            mt = img_info.get("media_type", "image/png")
-            st.markdown(f'<div class="m-full-img"><img src="data:{mt};base64,{b64}"></div>',
-                        unsafe_allow_html=True)
-            # 좌우 네비게이션
-            nc1, nc2, nc3 = st.columns([1, 2, 1])
-            with nc1:
-                if idx > 0 and st.button("◀ 이전", key="m_prev", use_container_width=True):
-                    st.session_state.m_expanded = idx - 1
-                    st.rerun()
-            with nc2:
-                st.caption(f"{idx+1} / {len(images)}")
-            with nc3:
-                if idx < len(images) - 1 and st.button("다음 ▶", key="m_next", use_container_width=True):
-                    st.session_state.m_expanded = idx + 1
-                    st.rerun()
-        return
-
     # ── 채팅 헤더 ──────────────────────────────────────────────
     st.markdown("""
     <div class="m-header">
@@ -297,7 +266,7 @@ def page_viewer_mobile():
         st.session_state.m_search = search_val.strip()
         st.session_state.m_agent = None
         st.session_state.m_period = None
-        st.session_state.m_expanded = None
+        st.session_state.m_expanded = False
         st.rerun()
 
     # ── 대화 렌더링 ────────────────────────────────────────────
@@ -348,7 +317,7 @@ def page_viewer_mobile():
                     btn_type = "primary" if st.session_state.m_period == pk else "secondary"
                     if st.button(pk, key=f"m_period_{pk}", use_container_width=True, type=btn_type):
                         st.session_state.m_period = pk
-                        st.session_state.m_expanded = None
+                        st.session_state.m_expanded = False
                         st.rerun()
 
             # 선택된 기간의 섬네일
@@ -357,19 +326,51 @@ def page_viewer_mobile():
                 p_images = periods.get(sel_period, {}).get("images", [])
 
                 if p_images:
-                    st.markdown(f'<div class="m-bubble-bot">'
-                                f'<b>{sel_period}</b> 시상 파일 ({len(p_images)}장)<br>'
-                                f'👆 탭하면 크게 볼 수 있어요</div>'
-                                f'<div class="m-clearfix"></div>',
-                                unsafe_allow_html=True)
+                    is_expanded = st.session_state.m_expanded
 
-                    # 섬네일 그리드 (2열)
-                    thumb_cols = st.columns(2)
-                    for idx, img_info in enumerate(p_images):
-                        with thumb_cols[idx % 2]:
+                    if not is_expanded:
+                        st.markdown(f'<div class="m-bubble-bot">'
+                                    f'<b>{sel_period}</b> 시상 파일 ({len(p_images)}장)</div>'
+                                    f'<div class="m-clearfix"></div>',
+                                    unsafe_allow_html=True)
+
+                        # 섬네일 그리드 (2열)
+                        thumb_cols = st.columns(2)
+                        for idx, img_info in enumerate(p_images):
+                            with thumb_cols[idx % 2]:
+                                try:
+                                    img_bytes = base64.standard_b64decode(img_info["data"])
+                                    st.image(img_bytes, use_container_width=True)
+                                except Exception:
+                                    pass
+
+                        # 크게 보기 버튼
+                        if st.button("🔍 탭하면 크게 볼 수 있어요", key="m_toggle_expand",
+                                     use_container_width=True):
+                            st.session_state.m_expanded = True
+                            st.rerun()
+
+                    else:
+                        st.markdown(f'<div class="m-bubble-bot">'
+                                    f'<b>{sel_period}</b> 시상 파일 ({len(p_images)}장)</div>'
+                                    f'<div class="m-clearfix"></div>',
+                                    unsafe_allow_html=True)
+
+                        # 접기 버튼
+                        if st.button("🔽 섬네일로 줄이기", key="m_toggle_collapse",
+                                     use_container_width=True):
+                            st.session_state.m_expanded = False
+                            st.rerun()
+
+                        # 전체 크기 이미지
+                        for idx, img_info in enumerate(p_images):
                             try:
-                                img_bytes = base64.standard_b64decode(img_info["data"])
-                                st.image(img_bytes, use_container_width=True)
+                                b64 = img_info["data"]
+                                mt = img_info.get("media_type", "image/png")
+                                st.markdown(
+                                    f'<div class="m-full-img">'
+                                    f'<img src="data:{mt};base64,{b64}"></div>',
+                                    unsafe_allow_html=True)
                             except Exception:
                                 pass
 
@@ -432,7 +433,7 @@ def page_viewer_mobile():
             st.session_state.m_search = ""
             st.session_state.m_agent = None
             st.session_state.m_period = None
-            st.session_state.m_expanded = None
+            st.session_state.m_expanded = False
             st.rerun()
 
 
