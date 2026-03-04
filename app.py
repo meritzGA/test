@@ -13,22 +13,23 @@ from agents import AGENT_LIST
 ADMIN_PASSWORD = "meritz0505"
 DATA_FILE      = "awards_data.json"
 DEFAULT_PERFS  = [100_000, 200_000, 300_000, 500_000]
-# st.secrets (Streamlit Cloud) → 환경변수 순서로 API 키 탐색
-def _get_api_key() -> str:
-    try:
-        return st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        pass
-    return os.environ.get("ANTHROPIC_API_KEY", "")
-
-ANTHROPIC_KEY = _get_api_key()
-
 st.set_page_config(
     page_title="GA 시상 계산기",
     page_icon="🏆",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── API 키 (set_page_config 이후에 st.secrets 접근) ──────────
+def _get_api_key() -> str:
+    """st.secrets → 환경변수 순서로 탐색"""
+    try:
+        v = st.secrets.get("ANTHROPIC_API_KEY", "")
+        if v:
+            return v
+    except Exception:
+        pass
+    return os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ══════════════════════════════════════════════════════════════
 # 데이터 I/O
@@ -531,10 +532,16 @@ def page_admin():
                         st.session_state.last_uploaded = None
                         st.rerun()
                 else:
-                    if not _get_api_key():
-                        st.warning("⚠️ ANTHROPIC_API_KEY 환경변수를 설정해야 AI 분석을 사용할 수 있습니다.")
+                    api_key = _get_api_key()
+                    # 키 상태 표시 (앞 8자리만)
+                    if api_key:
+                        masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+                        st.caption(f"🔑 API 키 확인됨: `{masked}`")
                     else:
-                        if st.button("🤖 AI로 시상 항목 자동 추출", use_container_width=True,
+                        st.warning("⚠️ ANTHROPIC_API_KEY가 설정되지 않았습니다.\n\n"
+                                   "Streamlit Cloud → Settings → Secrets에 추가하세요:\n```\n"
+                                   "ANTHROPIC_API_KEY = \"sk-ant-...\"\n```")
+                    if api_key and st.button("🤖 AI로 시상 항목 자동 추출", use_container_width=True,
                                      type="primary", key="analyze_btn"):
                             with st.spinner("Claude AI가 시상 이미지를 분석 중입니다..."):
                                 try:
