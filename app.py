@@ -286,6 +286,20 @@ def page_viewer_mobile():
         <div class="m-header-sub">대리점명을 입력해 주세요</div>
     </div>""", unsafe_allow_html=True)
 
+    # ── 상단 검색 입력 ─────────────────────────────────────────
+    search_val = st.text_input(
+        "대리점 검색",
+        placeholder="대리점명을 입력하세요 (예: 한국)",
+        key="m_search_input",
+        label_visibility="collapsed",
+    )
+    if search_val.strip() and search_val.strip() != st.session_state.m_search:
+        st.session_state.m_search = search_val.strip()
+        st.session_state.m_agent = None
+        st.session_state.m_period = None
+        st.session_state.m_expanded = None
+        st.rerun()
+
     # ── 대화 렌더링 ────────────────────────────────────────────
 
     # STEP 1: 검색어가 있으면 사용자 버블 + 매칭 결과
@@ -358,23 +372,64 @@ def page_viewer_mobile():
                                 st.image(img_bytes, use_container_width=True)
                             except Exception:
                                 pass
+
+                    # 카톡 공유 버튼 (Web Share API)
+                    img_data_js = ",".join(
+                        f'"data:{img.get("media_type","image/png")};base64,{img["data"]}"'
+                        for img in p_images
+                    )
+                    share_html = f"""
+                    <button id="shareBtn" style="
+                        width:100%;padding:.75rem;margin:.6rem 0;
+                        background:#FEE500;color:#3C1E1E;border:none;border-radius:12px;
+                        font-size:.95rem;font-weight:800;cursor:pointer;
+                        display:flex;align-items:center;justify-content:center;gap:.5rem;
+                        box-shadow:0 2px 8px rgba(0,0,0,.1);
+                        font-family:'Pretendard',sans-serif;
+                    " onclick="doShare()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="#3C1E1E">
+                            <path d="M12 3C6.48 3 2 6.58 2 10.94c0 2.8 1.86 5.27 4.66 6.67-.15.56-.96 3.58-1 3.73 0 0-.02.09.03.13.06.04.13.02.13.02.17-.02 2.98-1.97 4.15-2.78.33.04.67.06 1.03.06 5.52 0 10-3.58 10-7.83C22 6.58 17.52 3 12 3z"/>
+                        </svg>
+                        카카오톡으로 보내기
+                    </button>
+                    <script>
+                    async function doShare() {{
+                        try {{
+                            var srcs = [{img_data_js}];
+                            var files = [];
+                            for (var i = 0; i < srcs.length; i++) {{
+                                var res = await fetch(srcs[i]);
+                                var blob = await res.blob();
+                                var ext = srcs[i].indexOf('image/png') > -1 ? '.png' : '.jpg';
+                                files.push(new File([blob], '{agent}_' + (i+1) + ext, {{type: blob.type}}));
+                            }}
+                            if (navigator.canShare && navigator.canShare({{files: files}})) {{
+                                await navigator.share({{
+                                    title: '{agent} {sel_period} 시상',
+                                    text: '{agent} {sel_period} 시상 파일입니다',
+                                    files: files
+                                }});
+                            }} else {{
+                                alert('이 브라우저에서는 파일 공유를 지원하지 않습니다.\\n이미지를 길게 눌러 저장 후 공유해 주세요.');
+                            }}
+                        }} catch(e) {{
+                            if (e.name !== 'AbortError') {{
+                                alert('공유 중 오류: ' + e.message);
+                            }}
+                        }}
+                    }}
+                    </script>
+                    """
+                    import streamlit.components.v1 as components
+                    components.html(share_html, height=60)
                 else:
                     st.markdown(f'<div class="m-bubble-bot">{sel_period}에 등록된 파일이 없습니다</div>'
                                 f'<div class="m-clearfix"></div>', unsafe_allow_html=True)
 
-    # ── 새 검색 / 초기화 ──────────────────────────────────────
+    # ── 새 검색 안내 ──────────────────────────────────────────
     if st.session_state.m_agent:
         if st.button("🔄 다른 대리점 검색", key="m_reset", use_container_width=True):
             st.session_state.m_search = ""
-            st.session_state.m_agent = None
-            st.session_state.m_period = None
-            st.session_state.m_expanded = None
-            st.rerun()
-
-    # ── 채팅 입력 ──────────────────────────────────────────────
-    if not st.session_state.m_agent:
-        if prompt := st.chat_input("대리점명을 입력하세요"):
-            st.session_state.m_search = prompt.strip()
             st.session_state.m_agent = None
             st.session_state.m_period = None
             st.session_state.m_expanded = None
