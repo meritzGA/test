@@ -287,7 +287,8 @@ def page_viewer():
         </div>""", unsafe_allow_html=True)
         return
 
-    awards = st.session_state.all_data.get(selected, {}).get("awards", [])
+    _d = st.session_state.all_data.get(selected, {})
+    awards = _d if isinstance(_d, list) else _d.get("awards", [])
 
     if not awards:
         st.markdown(f"""<div style='text-align:center;padding:3.5rem;color:#bbb'>
@@ -461,7 +462,11 @@ def page_admin():
     if agent != "대리점을 선택하세요" and st.session_state.edit_agent != agent:
         st.session_state.edit_agent = agent
         saved = st.session_state.all_data.get(agent, {})
-        st.session_state.edit_awards = copy.deepcopy(saved.get("awards", []))
+        # 구버전(list) / 신버전(dict) 모두 호환
+        if isinstance(saved, list):
+            st.session_state.edit_awards = copy.deepcopy(saved)
+        else:
+            st.session_state.edit_awards = copy.deepcopy(saved.get("awards", []))
         st.session_state.editing_idx = None
         st.session_state.add_mode = False
         st.session_state.last_uploaded = None
@@ -472,12 +477,18 @@ def page_admin():
 
     awards = st.session_state.edit_awards
 
+    # 현황 카드도 구버전 호환
+    def _saved_count(agent):
+        s = st.session_state.all_data.get(agent, {})
+        if isinstance(s, list):
+            return len(s)
+        return len(s.get("awards", []))
+
     with cb:
         with st.container(border=True):
             st.markdown('<p class="admin-sec-title">현황</p>', unsafe_allow_html=True)
             st.metric("시상 항목", f"{len(awards)}개")
-            saved_cnt = len(st.session_state.all_data.get(agent, {}).get("awards", []))
-            st.caption(f"저장됨: {saved_cnt}개")
+            st.caption(f"저장됨: {_saved_count(agent)}개")
 
     # ══════════════════════════════════════════════════════════
     # 메인 레이아웃: 좌(업로드+목록) / 우(폼)
