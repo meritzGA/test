@@ -107,12 +107,12 @@ ANALYSIS_PROMPT = """
 def analyze_image_with_claude(image_bytes: bytes, media_type: str) -> list[dict]:
     """Claude Vision으로 시상 이미지 분석 → award 리스트 반환"""
     key = _get_api_key()   # 항상 최신 키 재조회 (secrets 반영)
-    client = anthropic.Anthropic(api_key=key)
+    client = anthropic.Anthropic(api_key=key, timeout=50.0)
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=4096,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2048,
         messages=[{
             "role": "user",
             "content": [
