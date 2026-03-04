@@ -337,50 +337,7 @@ def page_viewer():
     </table>
     """, unsafe_allow_html=True)
 
-    # 시상 항목별 상세 카드
-    st.markdown('<div class="section-label" style="margin-top:2rem">시상 항목별 상세</div>',
-                unsafe_allow_html=True)
 
-    for aw in awards:
-        badge_cls = "badge-flat" if aw["type"] == "정률" else "badge-tier"
-        badge_txt = "정률" if aw["type"] == "정률" else "구간별"
-
-        if aw["type"] == "정률":
-            desc_txt = aw.get("desc") or f"전체 실적 × {aw['rate']}%"
-        else:
-            tstr = " / ".join(
-                f"{fmt_man(t['from'])}~{fmt_man(t['to']) if t['to'] != -1 else '이상'}: {t['rate']}%"
-                for t in aw["tiers"]
-            )
-            desc_txt = aw.get("desc") or tstr
-
-        # 카드 헤더 (이름 + 배지 + 설명)
-        st.markdown(
-            f'<div class="award-detail-card-header">'
-            f'<span class="award-name">{aw["name"]}</span>'
-            f'<span class="type-badge {badge_cls}">{badge_txt}</span>'
-            f'<div class="award-desc-small">{desc_txt}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # 실적별 행 — st.columns으로 렌더링 (raw HTML 출력 버그 방지)
-        with st.container():
-            for p in perf_list:
-                amt = calc_award(aw, p)
-                col_l, col_r = st.columns([3, 2])
-                col_l.markdown(
-                    f"<span style='font-size:.88rem;color:#555;font-weight:500'>"
-                    f"체결 {fmt_man(p)}</span>",
-                    unsafe_allow_html=True,
-                )
-                col_r.markdown(
-                    f"<span style='font-size:.95rem;font-weight:700;color:#800000;"
-                    f"float:right'>{fmt_won(amt)}</span>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("<hr style='margin:.4rem 0 1rem;border:none;border-top:1px solid #f0f0f0'>",
-                        unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
