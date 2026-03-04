@@ -272,6 +272,50 @@ def page_admin():
     agent = st.selectbox("대리점", ["선택하세요"] + AGENT_LIST,
                          key="admin_agent", label_visibility="collapsed")
 
+    # ── 백업 / 복원 (항상 표시) ────────────────────────────────
+    with st.expander("💾 데이터 백업 / 복원", expanded=False):
+        bc1, bc2 = st.columns(2, gap="large")
+        with bc1:
+            st.markdown("**📥 백업 다운로드**")
+            st.caption("모든 대리점 데이터 다운로드 (이미지 포함)")
+            backup_json = json.dumps(st.session_state.all_data, ensure_ascii=False, indent=2)
+            st.download_button(
+                label="📥 전체 백업 다운로드",
+                data=backup_json.encode("utf-8"),
+                file_name="ga_awards_backup.json",
+                mime="application/json",
+                use_container_width=True,
+                key="backup_download",
+            )
+            agent_count = len([k for k, v in st.session_state.all_data.items()
+                               if isinstance(v, dict) and v.get("periods")])
+            st.caption(f"등록 대리점: {agent_count}곳")
+        with bc2:
+            st.markdown("**📤 백업 복원**")
+            st.caption("백업 파일 업로드 시 기존 데이터를 덮어씁니다")
+            restore_file = st.file_uploader(
+                "백업 JSON 파일 업로드",
+                type=["json"],
+                key="restore_upload",
+                label_visibility="collapsed",
+            )
+            if restore_file:
+                try:
+                    restore_data = json.loads(restore_file.read().decode("utf-8"))
+                    restore_count = len([k for k, v in restore_data.items()
+                                         if isinstance(v, dict) and v.get("periods")])
+                    st.info(f"📋 백업 파일: {restore_count}개 대리점 데이터 감지")
+                    if st.button("⚠️ 복원 실행 (기존 데이터 덮어쓰기)",
+                                 use_container_width=True, type="primary", key="restore_btn"):
+                        st.session_state.all_data = restore_data
+                        save_data(restore_data)
+                        st.success(f"✅ 복원 완료! ({restore_count}개 대리점)")
+                        st.rerun()
+                except json.JSONDecodeError:
+                    st.error("올바른 JSON 파일이 아닙니다.")
+                except Exception as e:
+                    st.error(f"복원 오류: {e}")
+
     if agent == "선택하세요":
         st.info("👆 대리점을 선택하세요.")
         return
