@@ -356,10 +356,6 @@ def page_viewer_mobile():
                             try:
                                 img_bytes = base64.standard_b64decode(img_info["data"])
                                 st.image(img_bytes, use_container_width=True)
-                                if st.button("🔍 확대", key=f"m_expand_{idx}",
-                                             use_container_width=True):
-                                    st.session_state.m_expanded = idx
-                                    st.rerun()
                             except Exception:
                                 pass
                 else:
