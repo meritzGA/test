@@ -5,14 +5,13 @@ GA 시상 계산기 v3
 """
 
 import streamlit as st
-import json, os, copy, base64, re, time, glob
+import json, os, copy, base64, re
 import anthropic
 from agents import AGENT_LIST
 
 # ── 설정 ─────────────────────────────────────────────────────
 ADMIN_PASSWORD = "meritz0505"
 DATA_FILE      = "awards_data.json"
-IMAGE_DIR      = "award_images"
 DEFAULT_PERFS  = [100_000, 200_000, 300_000, 500_000]
 st.set_page_config(
     page_title="GA 시상 계산기",
@@ -21,10 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 이미지 저장 디렉토리 생성
-os.makedirs(IMAGE_DIR, exist_ok=True)
-
-# ── API 키: session_state(직접입력) → st.secrets → 환경변수 ──
+# ── API 키 ────────────────────────────────────────────────────
 def _get_api_key() -> str:
     if st.session_state.get("manual_api_key", "").strip():
         return st.session_state.manual_api_key.strip()
@@ -50,26 +46,13 @@ def save_data(data: dict):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ══════════════════════════════════════════════════════════════
-# 이미지 파일 I/O
+# 이미지 유틸 (base64 ↔ bytes)
 # ══════════════════════════════════════════════════════════════
-def _safe_agent_name(agent: str) -> str:
-    return re.sub(r'[^\w가-힣]', '_', agent)
+def img_to_b64(img_bytes: bytes) -> str:
+    return base64.standard_b64encode(img_bytes).decode("utf-8")
 
-def save_image_file(agent: str, img_bytes: bytes, original_name: str) -> str:
-    safe = _safe_agent_name(agent)
-    ext = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else "png"
-    filename = f"{safe}_{int(time.time()*1000)}.{ext}"
-    filepath = os.path.join(IMAGE_DIR, filename)
-    with open(filepath, "wb") as f:
-        f.write(img_bytes)
-    return filename
-
-def load_image_file(filename: str) -> bytes | None:
-    filepath = os.path.join(IMAGE_DIR, filename)
-    if os.path.exists(filepath):
-        with open(filepath, "rb") as f:
-            return f.read()
-    return None
+def b64_to_img(b64_str: str) -> bytes:
+    return base64.standard_b64decode(b64_str)
 
 # ══════════════════════════════════════════════════════════════
 # 계산 유틸
@@ -130,23 +113,19 @@ ANALYSIS_PROMPT = """
 def analyze_image_with_claude(image_bytes: bytes, media_type: str) -> list[dict]:
     key = _get_api_key()
     client = anthropic.Anthropic(api_key=key, timeout=50.0)
-    b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-
+    b64 = img_to_b64(image_bytes)
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=2048,
         messages=[{
             "role": "user",
             "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": media_type, "data": b64},
-                },
+                {"type": "image",
+                 "source": {"type": "base64", "media_type": media_type, "data": b64}},
                 {"type": "text", "text": ANALYSIS_PROMPT},
             ],
         }],
     )
-
     raw = response.content[0].text.strip()
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
@@ -162,10 +141,9 @@ _defaults = {
     "all_data": None,
     "edit_agent": None,
     "edit_awards": [],
-    "edit_images": [],
+    "edit_images": [],      # [{"data":"base64...","media_type":"image/png","name":"파일명"}, ...]
     "editing_idx": None,
     "add_mode": False,
-    "analyzing": False,
     "last_uploaded": None,
     "manual_api_key": "",
 }
@@ -177,14 +155,13 @@ if st.session_state.all_data is None:
     st.session_state.all_data = load_data()
 
 # ══════════════════════════════════════════════════════════════
-# CSS
+# 공통 CSS
 # ══════════════════════════════════════════════════════════════
-CSS = """
+BASE_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap');
 html,body,[class*="css"],.stApp{font-family:'Pretendard',-apple-system,sans-serif!important}
 
-/* 사이드바 */
 section[data-testid="stSidebar"]{background:#1a0000!important}
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
@@ -197,10 +174,8 @@ section[data-testid="stSidebar"] .stButton>button:hover{background:rgba(128,0,0,
 section[data-testid="stSidebar"] [data-testid="stButton-primary"]>button{
   background:#800000!important;border-color:#a00000!important;color:#fff!important}
 
-/* 배경 */
 .stApp{background:#f4f4f6!important}
 
-/* 조회 히어로 */
 .hero-banner{
   background:linear-gradient(135deg,#800000 0%,#5a0000 55%,#380000 100%);
   border-radius:18px;padding:2rem 2.5rem;color:#fff;margin-bottom:1.5rem;
@@ -213,7 +188,6 @@ section[data-testid="stSidebar"] [data-testid="stButton-primary"]>button{
 .section-label{font-size:.75rem;font-weight:700;color:#800000;
   letter-spacing:.08em;text-transform:uppercase;margin:1.4rem 0 .65rem}
 
-/* 합계 테이블 */
 .sum-table{width:100%;border-collapse:collapse;background:#fff;
   border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.07);margin-top:.8rem}
 .sum-table th{background:#800000;color:#fff;padding:.7rem 1rem;
@@ -224,63 +198,46 @@ section[data-testid="stSidebar"] [data-testid="stButton-primary"]>button{
 .sum-table tr:last-child td{background:#fff6f6;font-weight:800;color:#800000;border-bottom:none}
 .sum-table tr:not(:last-child):hover td{background:#fdf4f4}
 
-/* 배지 */
 .type-badge{display:inline-block;font-size:.68rem;font-weight:700;
   padding:1px 8px;border-radius:20px;margin-left:.4rem;vertical-align:middle}
 .badge-flat{background:#fff0f0;color:#800000}
 .badge-tier{background:#eff3ff;color:#2040b0}
 
-/* 관리자 헤더 */
 .admin-header-bar{background:#1a0000;color:#fff;padding:1.1rem 1.6rem;
   border-radius:14px;margin-bottom:1.2rem;display:flex;align-items:center;gap:1rem}
 .admin-header-title{font-size:1.2rem;font-weight:800}
 .admin-header-sub{font-size:.8rem;opacity:.6;margin-top:2px}
-
-/* 관리자 섹션 소제목 */
 .admin-sec-title{font-size:.75rem;font-weight:700;color:#800000;
   letter-spacing:.08em;text-transform:uppercase;margin:0 0 .7rem;padding:0}
 
-/* 시상 카드 */
 .aw-card{background:#fafafa;border:1.5px solid #ebebeb;border-radius:10px;
   padding:.85rem 1rem;margin-bottom:.5rem;transition:border-color .15s,background .15s}
 .aw-card.editing{background:#fff8f8;border-color:#800000}
 .aw-card-name{font-weight:700;color:#1a1a1a;font-size:.93rem}
 .aw-card-meta{font-size:.76rem;color:#999;margin-top:2px}
 
-/* 버튼 */
 .stButton>button{border-radius:9px!important;font-weight:700!important;transition:all .15s!important}
 div[data-baseweb="select"]>div{border-radius:10px!important;font-weight:600!important}
 .stTextInput input,.stNumberInput input{border-radius:8px!important}
 </style>
 """
 
-# ── 관리자 우측 sticky JS ─────────────────────────────────────
-STICKY_JS = """
-<script>
-(function(){
-    function go(){
-        var doc = window.parent.document;
-        var blocks = doc.querySelectorAll('[data-testid="stHorizontalBlock"]');
-        for(var i=0;i<blocks.length;i++){
-            var cols = blocks[i].querySelectorAll(':scope > [data-testid="stColumn"]');
-            if(cols.length===2){
-                var left = cols[0].querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
-                if(left.length>=2){
-                    blocks[i].style.alignItems='flex-start';
-                    cols[1].style.position='sticky';
-                    cols[1].style.top='3.5rem';
-                    cols[1].style.alignSelf='flex-start';
-                    cols[1].style.maxHeight='88vh';
-                    cols[1].style.overflowY='auto';
-                }
-            }
-        }
-    }
-    setTimeout(go,300);
-    setTimeout(go,800);
-    setTimeout(go,1500);
-})();
-</script>
+# ── 관리자 전용 CSS: 우측 폼 sticky ──────────────────────────
+ADMIN_STICKY_CSS = """
+<style>
+/* 관리자 메인 2-column 레이아웃: 우측 sticky 고정 */
+[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+    align-items: flex-start !important;
+}
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]
+> [data-testid="stColumn"]:last-child {
+    position: sticky !important;
+    top: 1rem !important;
+    align-self: flex-start !important;
+    max-height: 92vh;
+    overflow-y: auto;
+}
+</style>
 """
 
 # ══════════════════════════════════════════════════════════════
@@ -310,7 +267,7 @@ with st.sidebar:
 # 조회 화면
 # ══════════════════════════════════════════════════════════════
 def page_viewer():
-    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown(BASE_CSS, unsafe_allow_html=True)
     st.markdown("""
     <div class="hero-banner">
         <div class="hero-title">🏆 GA 시상 계산기</div>
@@ -387,28 +344,13 @@ def page_viewer():
         st.markdown(f'<div class="section-label">{selected} · 시상 계획서 원본</div>',
                     unsafe_allow_html=True)
         for img_entry in image_list:
-            img_bytes = None
-            caption = "시상 이미지"
-
-            if isinstance(img_entry, str):
-                # 파일명만 저장된 경우
-                img_bytes = load_image_file(img_entry)
-                caption = img_entry
-            elif isinstance(img_entry, dict):
-                if "filename" in img_entry:
-                    # 신버전: {"filename": "xxx.png", "name": "원본명"}
-                    img_bytes = load_image_file(img_entry["filename"])
-                    caption = img_entry.get("name", img_entry["filename"])
-                elif "data" in img_entry:
-                    # 구버전 호환: base64 dict
-                    try:
-                        img_bytes = base64.standard_b64decode(img_entry["data"])
-                        caption = img_entry.get("name", "시상 이미지")
-                    except Exception:
-                        pass
-
-            if img_bytes:
-                st.image(img_bytes, caption=caption, use_container_width=True)
+            try:
+                if isinstance(img_entry, dict) and "data" in img_entry:
+                    img_bytes = b64_to_img(img_entry["data"])
+                    caption = img_entry.get("name", "시상 이미지")
+                    st.image(img_bytes, caption=caption, use_container_width=True)
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════
@@ -447,7 +389,7 @@ def render_tier_editor(tiers: list, key_prefix: str):
 
 
 # ══════════════════════════════════════════════════════════════
-# 관리자 — 시상 항목 폼 (추가/수정 공용)
+# 관리자 — 시상 항목 폼
 # ══════════════════════════════════════════════════════════════
 def award_form(prefix: str, init: dict | None = None) -> dict | None:
     init = init or {}
@@ -499,7 +441,8 @@ def award_form(prefix: str, init: dict | None = None) -> dict | None:
 # 관리자 화면
 # ══════════════════════════════════════════════════════════════
 def page_admin():
-    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown(BASE_CSS, unsafe_allow_html=True)
+    st.markdown(ADMIN_STICKY_CSS, unsafe_allow_html=True)
 
     # ── 로그인 ─────────────────────────────────────────────────
     if not st.session_state.admin_auth:
@@ -523,18 +466,17 @@ def page_admin():
         return
 
     # ── 헤더 ───────────────────────────────────────────────────
-    ch, co = st.columns([6,1])
-    with ch:
-        st.markdown("""
-        <div class="admin-header-bar">
-            <span style='font-size:1.7rem'>⚙️</span>
-            <div>
-                <div class="admin-header-title">관리자 설정</div>
-                <div class="admin-header-sub">시상 이미지 업로드 → AI 자동 분석 → 항목 편집 → 저장</div>
-            </div>
-        </div>""", unsafe_allow_html=True)
-    with co:
-        st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="admin-header-bar">
+        <span style='font-size:1.7rem'>⚙️</span>
+        <div style='flex:1'>
+            <div class="admin-header-title">관리자 설정</div>
+            <div class="admin-header-sub">시상 이미지 업로드 → AI 자동 분석 → 항목 편집 → 저장</div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    hc1, hc2 = st.columns([6,1])
+    with hc2:
         if st.button("로그아웃", key="logout", use_container_width=True):
             st.session_state.admin_auth = False
             st.rerun()
@@ -542,10 +484,10 @@ def page_admin():
     # ── 대리점 선택 ────────────────────────────────────────────
     ca, cb = st.columns([4,1], gap="medium")
     with ca:
-        with st.container(border=True):
-            st.markdown('<p class="admin-sec-title">대리점 선택</p>', unsafe_allow_html=True)
-            agent = st.selectbox("대리점", ["대리점을 선택하세요"] + AGENT_LIST,
-                                 label_visibility="collapsed", key="admin_agent")
+        agent = st.selectbox("대리점 선택", ["대리점을 선택하세요"] + AGENT_LIST,
+                             key="admin_agent")
+    with cb:
+        pass
 
     if agent != "대리점을 선택하세요" and st.session_state.edit_agent != agent:
         st.session_state.edit_agent = agent
@@ -566,24 +508,12 @@ def page_admin():
 
     awards = st.session_state.edit_awards
 
-    def _saved_count(ag):
-        s = st.session_state.all_data.get(ag, {})
-        if isinstance(s, list):
-            return len(s)
-        return len(s.get("awards", []))
-
-    with cb:
-        with st.container(border=True):
-            st.markdown('<p class="admin-sec-title">현황</p>', unsafe_allow_html=True)
-            st.metric("시상 항목", f"{len(awards)}개")
-            st.caption(f"저장됨: {_saved_count(agent)}개")
-
     # ══════════════════════════════════════════════════════════
-    # 메인 레이아웃: 좌(업로드+목록) / 우(폼)
+    # 메인 레이아웃: 좌(업로드+목록) / 우(폼) — sticky 적용됨
     # ══════════════════════════════════════════════════════════
     left_col, right_col = st.columns([5, 4], gap="large")
 
-    # ── 좌: 이미지 업로드 + AI 분석 ───────────────────────────
+    # ── 좌: 이미지 업로드 + AI 분석 + 항목 목록 ────────────────
     with left_col:
 
         with st.container(border=True):
@@ -594,8 +524,7 @@ def page_admin():
                 manual_key = st.text_input(
                     "API 키를 직접 입력하세요 (sk-ant-...)",
                     value=st.session_state.get("manual_api_key", ""),
-                    type="password",
-                    key="api_key_input",
+                    type="password", key="api_key_input",
                     placeholder="sk-ant-api03-...",
                     help="여기에 입력한 키가 최우선으로 사용됩니다.",
                 )
@@ -607,95 +536,88 @@ def page_admin():
                     masked = cur_key[:12] + "..." + cur_key[-4:]
                     st.success(f"✅ 키 준비됨: `{masked}`")
                 else:
-                    st.warning("API 키가 없습니다. 위에 직접 입력하거나 Streamlit Secrets에 설정하세요.")
+                    st.warning("API 키가 없습니다.")
 
             uploaded = st.file_uploader(
                 "시상 계획서 이미지를 업로드하세요",
                 type=["png","jpg","jpeg","webp"],
-                key="award_image",
-                label_visibility="collapsed",
+                key="award_image", label_visibility="collapsed",
             )
 
             if uploaded:
                 st.image(uploaded, caption="업로드된 시상 이미지", use_container_width=True)
-
                 file_id = f"{uploaded.name}_{uploaded.size}"
                 already_analyzed = st.session_state.last_uploaded == file_id
 
                 if already_analyzed:
-                    st.success("✅ 이 이미지는 이미 분석되었습니다. 아래 목록을 확인하세요.")
+                    st.success("✅ 이미 분석 완료. 아래 목록을 확인하세요.")
                     if st.button("🔄 다시 분석", use_container_width=True, key="reanalyze_btn"):
                         st.session_state.last_uploaded = None
                         st.rerun()
                 else:
                     api_key = _get_api_key()
-                    if api_key and st.button("🤖 AI로 시상 항목 자동 추출", use_container_width=True,
-                                     type="primary", key="analyze_btn"):
-                            with st.spinner("Claude AI가 시상 이미지를 분석 중입니다..."):
-                                try:
-                                    img_bytes = uploaded.read()
-                                    mt_map = {"png":"image/png","jpg":"image/jpeg",
-                                              "jpeg":"image/jpeg","webp":"image/webp"}
-                                    ext = uploaded.name.rsplit(".",1)[-1].lower()
-                                    media_type = mt_map.get(ext, "image/jpeg")
+                    if api_key and st.button("🤖 AI로 시상 항목 자동 추출",
+                                             use_container_width=True,
+                                             type="primary", key="analyze_btn"):
+                        with st.spinner("Claude AI가 시상 이미지를 분석 중입니다..."):
+                            try:
+                                img_bytes = uploaded.read()
+                                mt_map = {"png":"image/png","jpg":"image/jpeg",
+                                          "jpeg":"image/jpeg","webp":"image/webp"}
+                                ext = uploaded.name.rsplit(".",1)[-1].lower()
+                                media_type = mt_map.get(ext, "image/jpeg")
 
-                                    extracted = analyze_image_with_claude(img_bytes, media_type)
+                                extracted = analyze_image_with_claude(img_bytes, media_type)
 
-                                    if extracted:
-                                        # 이미지를 파일로 저장
-                                        filename = save_image_file(agent, img_bytes, uploaded.name)
-                                        st.session_state.edit_images.append({
-                                            "filename": filename,
-                                            "name": uploaded.name,
-                                        })
-                                        existing_names = {a["name"] for a in awards}
-                                        added = 0
-                                        for aw in extracted:
-                                            if aw["name"] not in existing_names:
-                                                awards.append(aw)
-                                                existing_names.add(aw["name"])
-                                                added += 1
-                                        st.session_state.last_uploaded = file_id
-                                        st.success(f"✅ {len(extracted)}개 항목 추출 완료! "
-                                                   f"(신규 추가: {added}개)")
-                                        st.rerun()
-                                    else:
-                                        st.warning("이미지에서 시상 항목을 찾을 수 없었습니다. "
-                                                   "수동으로 추가해 주세요.")
-                                except json.JSONDecodeError:
-                                    st.error("AI 응답 파싱 오류. 다시 시도해 주세요.")
-                                except Exception as e:
-                                    st.error(f"분석 오류: {e}")
+                                if extracted:
+                                    # 이미지 base64로 저장
+                                    st.session_state.edit_images.append({
+                                        "data": img_to_b64(img_bytes),
+                                        "media_type": media_type,
+                                        "name": uploaded.name,
+                                    })
+                                    existing_names = {a["name"] for a in awards}
+                                    added = 0
+                                    for aw in extracted:
+                                        if aw["name"] not in existing_names:
+                                            awards.append(aw)
+                                            existing_names.add(aw["name"])
+                                            added += 1
+                                    st.session_state.last_uploaded = file_id
+                                    st.success(f"✅ {len(extracted)}개 항목 추출! (신규: {added}개)")
+                                    st.rerun()
+                                else:
+                                    st.warning("항목을 찾을 수 없습니다. 수동으로 추가하세요.")
+                            except json.JSONDecodeError:
+                                st.error("AI 응답 파싱 오류. 다시 시도해 주세요.")
+                            except Exception as e:
+                                st.error(f"분석 오류: {e}")
 
-        # ── 저장된 이미지 미리보기 ─────────────────────────────
+        # ── 저장된 이미지 미리보기 ────────────────────────────
         if st.session_state.edit_images:
             with st.container(border=True):
                 st.markdown('<p class="admin-sec-title">📎 저장된 시상 이미지</p>',
                             unsafe_allow_html=True)
                 for idx_img, img_entry in enumerate(st.session_state.edit_images):
-                    if isinstance(img_entry, dict) and "filename" in img_entry:
-                        img_bytes = load_image_file(img_entry["filename"])
-                        if img_bytes:
-                            st.image(img_bytes,
-                                     caption=img_entry.get("name", ""),
+                    if isinstance(img_entry, dict) and "data" in img_entry:
+                        try:
+                            st.image(b64_to_img(img_entry["data"]),
+                                     caption=img_entry.get("name", "시상 이미지"),
                                      use_container_width=True)
-                        ci1, ci2 = st.columns([3, 1])
-                        if ci2.button("🗑 이미지 삭제", key=f"del_img_{idx_img}",
-                                      use_container_width=True):
-                            fp = os.path.join(IMAGE_DIR, img_entry["filename"])
-                            if os.path.exists(fp):
-                                os.remove(fp)
+                        except Exception:
+                            st.warning(f"이미지 로드 실패: {img_entry.get('name','')}")
+                        if st.button(f"🗑 이미지 삭제", key=f"del_img_{idx_img}"):
                             st.session_state.edit_images.pop(idx_img)
                             st.rerun()
 
-        # ── 시상 항목 목록 ─────────────────────────────────────
+        # ── 시상 항목 목록 ────────────────────────────────────
         with st.container(border=True):
             st.markdown('<p class="admin-sec-title">시상 항목 목록</p>', unsafe_allow_html=True)
 
             if not awards:
                 st.markdown(
                     "<p style='color:#bbb;text-align:center;padding:1.5rem 0'>"
-                    "이미지를 업로드하거나 아래 버튼으로 직접 추가하세요</p>",
+                    "이미지를 업로드하거나 버튼으로 직접 추가하세요</p>",
                     unsafe_allow_html=True)
             else:
                 for i, aw in enumerate(awards):
@@ -742,7 +664,7 @@ def page_admin():
             st.session_state.editing_idx = None
             st.rerun()
 
-    # ── 우: 추가/수정 폼 ───────────────────────────────────────
+    # ── 우: 추가/수정 폼 (sticky) ─────────────────────────────
     with right_col:
         if st.session_state.add_mode:
             with st.container(border=True):
@@ -784,9 +706,6 @@ def page_admin():
                     <span style='font-size:.82rem'>항목을 선택하면 수정할 수 있습니다</span>
                 </div>
             </div>""", unsafe_allow_html=True)
-
-    # ── sticky JS 삽입 ────────────────────────────────────────
-    st.components.v1.html(STICKY_JS, height=0)
 
 
 # ══════════════════════════════════════════════════════════════
