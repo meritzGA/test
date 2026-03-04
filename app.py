@@ -635,8 +635,8 @@ def page_admin():
         st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
         if st.button("💾  저장 — 대리점 시상 확정", use_container_width=True,
                      type="primary", key="save_btn"):
-            if agent not in st.session_state.all_data:
-                st.session_state.all_data[agent] = {}
+            if agent not in st.session_state.all_data or isinstance(st.session_state.all_data[agent], list):
+               st.session_state.all_data[agent] = {}
             st.session_state.all_data[agent]["awards"] = copy.deepcopy(awards)
             save_data(st.session_state.all_data)
             st.success(f"✅  '{agent}' 시상 항목 저장 완료! ({len(awards)}개)")
