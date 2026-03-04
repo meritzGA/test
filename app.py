@@ -13,7 +13,15 @@ from agents import AGENT_LIST
 ADMIN_PASSWORD = "meritz0505"
 DATA_FILE      = "awards_data.json"
 DEFAULT_PERFS  = [100_000, 200_000, 300_000, 500_000]
-ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+# st.secrets (Streamlit Cloud) → 환경변수 순서로 API 키 탐색
+def _get_api_key() -> str:
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("ANTHROPIC_API_KEY", "")
+
+ANTHROPIC_KEY = _get_api_key()
 
 st.set_page_config(
     page_title="GA 시상 계산기",
@@ -93,7 +101,8 @@ ANALYSIS_PROMPT = """
 
 def analyze_image_with_claude(image_bytes: bytes, media_type: str) -> list[dict]:
     """Claude Vision으로 시상 이미지 분석 → award 리스트 반환"""
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    key = _get_api_key()   # 항상 최신 키 재조회 (secrets 반영)
+    client = anthropic.Anthropic(api_key=key)
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     response = client.messages.create(
@@ -522,7 +531,7 @@ def page_admin():
                         st.session_state.last_uploaded = None
                         st.rerun()
                 else:
-                    if not ANTHROPIC_KEY:
+                    if not _get_api_key():
                         st.warning("⚠️ ANTHROPIC_API_KEY 환경변수를 설정해야 AI 분석을 사용할 수 있습니다.")
                     else:
                         if st.button("🤖 AI로 시상 항목 자동 추출", use_container_width=True,
