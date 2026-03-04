@@ -273,7 +273,11 @@ def _read_prize_items(cfg, match_df):
             if not col_prize or col_prize not in match_df.columns: continue
             col_elig = item.get('col_eligible', '')
             if col_elig and col_elig in match_df.columns:
-                if safe_float(match_df[col_elig].values[0]) == 0: continue
+                raw_elig = match_df[col_elig].values[0]
+                # 공란/NaN → 무조건 대상, 명시적 0 → 미대상(건너뜀)
+                if pd.notna(raw_elig) and str(raw_elig).strip() != '':
+                    if safe_float(raw_elig) == 0:
+                        continue
             amt = safe_float(match_df[col_prize].values[0])
             prize_details.append({"label": label or col_prize, "amount": amt})
     else:
