@@ -239,6 +239,19 @@ section[data-testid="stSidebar"] [data-testid="stButton-primary"]>button{
 .stButton>button{border-radius:9px!important;font-weight:700!important;transition:all .15s!important}
 div[data-baseweb="select"]>div{border-radius:10px!important;font-weight:600!important}
 .stTextInput input,.stNumberInput input{border-radius:8px!important}
+
+/* 관리자 우측 폼 상단 고정 */
+[data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"]) {
+    align-items: flex-start !important;
+}
+[data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"])
+> [data-testid="stColumn"]:last-child {
+    position: sticky;
+    top: 3.5rem;
+    align-self: flex-start;
+    max-height: 90vh;
+    overflow-y: auto;
+}
 </style>
 """
 
@@ -635,8 +648,9 @@ def page_admin():
         st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
         if st.button("💾  저장 — 대리점 시상 확정", use_container_width=True,
                      type="primary", key="save_btn"):
+            # 구버전(list) 호환: dict가 아니면 dict로 변환
             if agent not in st.session_state.all_data or isinstance(st.session_state.all_data[agent], list):
-               st.session_state.all_data[agent] = {}
+                st.session_state.all_data[agent] = {}
             st.session_state.all_data[agent]["awards"] = copy.deepcopy(awards)
             save_data(st.session_state.all_data)
             st.success(f"✅  '{agent}' 시상 항목 저장 완료! ({len(awards)}개)")
