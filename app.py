@@ -369,6 +369,18 @@ def page_admin():
                     "file_id": file_id,
                 })
 
+    # ── 상단 저장 버튼 ─────────────────────────────────────────
+    def _do_save():
+        agent_data["periods"][period_key] = {
+            "images": copy.deepcopy(existing_images),
+        }
+        st.session_state.all_data[agent] = agent_data
+        save_data(st.session_state.all_data)
+
+    if st.button("💾  저장", use_container_width=True, type="primary", key="save_top"):
+        _do_save()
+        st.success(f"✅ '{agent}' — {period_key} 저장 완료! ({len(existing_images)}장)")
+
     # ── 등록된 이미지 미리보기 ─────────────────────────────────
     if existing_images:
         st.markdown(f'<div class="sec-label">등록된 이미지 ({len(existing_images)}장)</div>',
@@ -391,14 +403,9 @@ def page_admin():
         st.markdown("<div style='text-align:center;padding:1.5rem;color:#bbb;font-size:.9rem'>"
                     "아직 등록된 이미지가 없습니다</div>", unsafe_allow_html=True)
 
-    # ── 저장 ───────────────────────────────────────────────────
     st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
-    if st.button("💾  저장", use_container_width=True, type="primary", key="save_admin"):
-        agent_data["periods"][period_key] = {
-            "images": copy.deepcopy(existing_images),
-        }
-        st.session_state.all_data[agent] = agent_data
-        save_data(st.session_state.all_data)
+    if st.button("💾  저장", use_container_width=True, type="primary", key="save_bottom"):
+        _do_save()
         st.success(f"✅ '{agent}' — {period_key} 저장 완료! ({len(existing_images)}장)")
 
     # ── 전체 등록 현황 ─────────────────────────────────────────
