@@ -20,16 +20,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── API 키 (set_page_config 이후에 st.secrets 접근) ──────────
+# ── API 키: session_state(직접입력) → st.secrets → 환경변수 ──
 def _get_api_key() -> str:
-    """st.secrets → 환경변수 순서로 탐색"""
+    # 1순위: 관리자가 화면에서 직접 입력한 키
+    if st.session_state.get("manual_api_key", "").strip():
+        return st.session_state.manual_api_key.strip()
+    # 2순위: st.secrets
     try:
-        v = st.secrets.get("ANTHROPIC_API_KEY", "")
-        if v:
-            return v
+        v = st.secrets["ANTHROPIC_API_KEY"]
+        if v and v.strip():
+            return v.strip()
     except Exception:
         pass
-    return os.environ.get("ANTHROPIC_API_KEY", "")
+    # 3순위: 환경변수
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 # ══════════════════════════════════════════════════════════════
 # 데이터 I/O
@@ -140,7 +144,8 @@ _defaults = {
     "editing_idx": None,   # 수정 폼 열린 인덱스
     "add_mode": False,
     "analyzing": False,
-    "last_uploaded": None, # 업로드된 파일명 (중복 분석 방지)
+    "last_uploaded": None,
+    "manual_api_key": "", # 업로드된 파일명 (중복 분석 방지)
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -512,6 +517,26 @@ def page_admin():
             st.markdown('<p class="admin-sec-title">📷 시상 이미지 업로드 & AI 분석</p>',
                         unsafe_allow_html=True)
 
+            # API 키 직접 입력 (secrets/env 설정 없이도 사용 가능)
+            with st.expander("🔑 Anthropic API 키 설정", expanded=not bool(_get_api_key())):
+                manual_key = st.text_input(
+                    "API 키를 직접 입력하세요 (sk-ant-...)",
+                    value=st.session_state.get("manual_api_key", ""),
+                    type="password",
+                    key="api_key_input",
+                    placeholder="sk-ant-api03-...",
+                    help="여기에 입력한 키가 최우선으로 사용됩니다.",
+                )
+                if manual_key != st.session_state.get("manual_api_key", ""):
+                    st.session_state.manual_api_key = manual_key
+                    st.rerun()
+                cur_key = _get_api_key()
+                if cur_key:
+                    masked = cur_key[:12] + "..." + cur_key[-4:]
+                    st.success(f"✅ 키 준비됨: `{masked}`")
+                else:
+                    st.warning("API 키가 없습니다. 위에 직접 입력하거나 Streamlit Secrets에 설정하세요.")
+
             uploaded = st.file_uploader(
                 "시상 계획서 이미지를 업로드하세요",
                 type=["png","jpg","jpeg","webp"],
@@ -533,14 +558,6 @@ def page_admin():
                         st.rerun()
                 else:
                     api_key = _get_api_key()
-                    # 키 상태 표시 (앞 8자리만)
-                    if api_key:
-                        masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
-                        st.caption(f"🔑 API 키 확인됨: `{masked}`")
-                    else:
-                        st.warning("⚠️ ANTHROPIC_API_KEY가 설정되지 않았습니다.\n\n"
-                                   "Streamlit Cloud → Settings → Secrets에 추가하세요:\n```\n"
-                                   "ANTHROPIC_API_KEY = \"sk-ant-...\"\n```")
                     if api_key and st.button("🤖 AI로 시상 항목 자동 추출", use_container_width=True,
                                      type="primary", key="analyze_btn"):
                             with st.spinner("Claude AI가 시상 이미지를 분석 중입니다..."):
