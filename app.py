@@ -5,13 +5,14 @@ GA 시상 계산기 v3
 """
 
 import streamlit as st
-import json, os, copy, base64, re
+import json, os, copy, base64, re, time, glob
 import anthropic
 from agents import AGENT_LIST
 
 # ── 설정 ─────────────────────────────────────────────────────
 ADMIN_PASSWORD = "meritz0505"
 DATA_FILE      = "awards_data.json"
+IMAGE_DIR      = "award_images"
 DEFAULT_PERFS  = [100_000, 200_000, 300_000, 500_000]
 st.set_page_config(
     page_title="GA 시상 계산기",
@@ -20,19 +21,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# 이미지 저장 디렉토리 생성
+os.makedirs(IMAGE_DIR, exist_ok=True)
+
 # ── API 키: session_state(직접입력) → st.secrets → 환경변수 ──
 def _get_api_key() -> str:
-    # 1순위: 관리자가 화면에서 직접 입력한 키
     if st.session_state.get("manual_api_key", "").strip():
         return st.session_state.manual_api_key.strip()
-    # 2순위: st.secrets
     try:
         v = st.secrets["ANTHROPIC_API_KEY"]
         if v and v.strip():
             return v.strip()
     except Exception:
         pass
-    # 3순위: 환경변수
     return os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 # ══════════════════════════════════════════════════════════════
@@ -47,6 +48,28 @@ def load_data() -> dict:
 def save_data(data: dict):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ══════════════════════════════════════════════════════════════
+# 이미지 파일 I/O
+# ══════════════════════════════════════════════════════════════
+def _safe_agent_name(agent: str) -> str:
+    return re.sub(r'[^\w가-힣]', '_', agent)
+
+def save_image_file(agent: str, img_bytes: bytes, original_name: str) -> str:
+    safe = _safe_agent_name(agent)
+    ext = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else "png"
+    filename = f"{safe}_{int(time.time()*1000)}.{ext}"
+    filepath = os.path.join(IMAGE_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(img_bytes)
+    return filename
+
+def load_image_file(filename: str) -> bytes | None:
+    filepath = os.path.join(IMAGE_DIR, filename)
+    if os.path.exists(filepath):
+        with open(filepath, "rb") as f:
+            return f.read()
+    return None
 
 # ══════════════════════════════════════════════════════════════
 # 계산 유틸
@@ -105,8 +128,7 @@ ANALYSIS_PROMPT = """
 """
 
 def analyze_image_with_claude(image_bytes: bytes, media_type: str) -> list[dict]:
-    """Claude Vision으로 시상 이미지 분석 → award 리스트 반환"""
-    key = _get_api_key()   # 항상 최신 키 재조회 (secrets 반영)
+    key = _get_api_key()
     client = anthropic.Anthropic(api_key=key, timeout=50.0)
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
@@ -126,7 +148,6 @@ def analyze_image_with_claude(image_bytes: bytes, media_type: str) -> list[dict]
     )
 
     raw = response.content[0].text.strip()
-    # JSON 블록만 추출
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
     parsed = json.loads(raw)
@@ -140,13 +161,13 @@ _defaults = {
     "admin_auth": False,
     "all_data": None,
     "edit_agent": None,
-    "edit_awards": [],     # 현재 편집 중인 시상 목록
-    "edit_images": [],     # 현재 편집 중인 시상 이미지 (base64 리스트)
-    "editing_idx": None,   # 수정 폼 열린 인덱스
+    "edit_awards": [],
+    "edit_images": [],
+    "editing_idx": None,
     "add_mode": False,
     "analyzing": False,
     "last_uploaded": None,
-    "manual_api_key": "", # 업로드된 파일명 (중복 분석 방지)
+    "manual_api_key": "",
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -219,41 +240,47 @@ section[data-testid="stSidebar"] [data-testid="stButton-primary"]>button{
 .admin-sec-title{font-size:.75rem;font-weight:700;color:#800000;
   letter-spacing:.08em;text-transform:uppercase;margin:0 0 .7rem;padding:0}
 
-/* 시상 카드 (관리자 목록) */
+/* 시상 카드 */
 .aw-card{background:#fafafa;border:1.5px solid #ebebeb;border-radius:10px;
   padding:.85rem 1rem;margin-bottom:.5rem;transition:border-color .15s,background .15s}
 .aw-card.editing{background:#fff8f8;border-color:#800000}
 .aw-card-name{font-weight:700;color:#1a1a1a;font-size:.93rem}
 .aw-card-meta{font-size:.76rem;color:#999;margin-top:2px}
 
-/* 이미지 업로드 존 */
-.upload-zone{background:#fff;border:2px dashed #d0d0d0;border-radius:14px;
-  padding:1.5rem;text-align:center;transition:border-color .2s}
-.upload-zone:hover{border-color:#800000}
-
-/* AI 분석 뱃지 */
-.ai-badge{background:linear-gradient(90deg,#800000,#cc2200);
-  color:#fff;border-radius:8px;padding:.3rem .8rem;font-size:.78rem;font-weight:700;
-  display:inline-block;margin-bottom:.6rem}
-
 /* 버튼 */
 .stButton>button{border-radius:9px!important;font-weight:700!important;transition:all .15s!important}
 div[data-baseweb="select"]>div{border-radius:10px!important;font-weight:600!important}
 .stTextInput input,.stNumberInput input{border-radius:8px!important}
-
-/* 관리자 우측 폼 상단 고정 */
-[data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"]) {
-    align-items: flex-start !important;
-}
-[data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has([data-testid="stVerticalBlockBorderWrapper"])
-> [data-testid="stColumn"]:last-child {
-    position: sticky;
-    top: 3.5rem;
-    align-self: flex-start;
-    max-height: 90vh;
-    overflow-y: auto;
-}
 </style>
+"""
+
+# ── 관리자 우측 sticky JS ─────────────────────────────────────
+STICKY_JS = """
+<script>
+(function(){
+    function go(){
+        var doc = window.parent.document;
+        var blocks = doc.querySelectorAll('[data-testid="stHorizontalBlock"]');
+        for(var i=0;i<blocks.length;i++){
+            var cols = blocks[i].querySelectorAll(':scope > [data-testid="stColumn"]');
+            if(cols.length===2){
+                var left = cols[0].querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
+                if(left.length>=2){
+                    blocks[i].style.alignItems='flex-start';
+                    cols[1].style.position='sticky';
+                    cols[1].style.top='3.5rem';
+                    cols[1].style.alignSelf='flex-start';
+                    cols[1].style.maxHeight='88vh';
+                    cols[1].style.overflowY='auto';
+                }
+            }
+        }
+    }
+    setTimeout(go,300);
+    setTimeout(go,800);
+    setTimeout(go,1500);
+})();
+</script>
 """
 
 # ══════════════════════════════════════════════════════════════
@@ -352,19 +379,36 @@ def page_viewer():
     """, unsafe_allow_html=True)
 
     # ── 시상 이미지 표시 ─────────────────────────────────────
-    images = []
+    image_list = []
     if isinstance(_d, dict):
-        images = _d.get("images", [])
-    if images:
+        image_list = _d.get("images", [])
+
+    if image_list:
         st.markdown(f'<div class="section-label">{selected} · 시상 계획서 원본</div>',
                     unsafe_allow_html=True)
-        for img_info in images:
-            try:
-                img_bytes = base64.standard_b64decode(img_info["data"])
-                st.image(img_bytes, caption=img_info.get("name", "시상 이미지"),
-                         use_container_width=True)
-            except Exception:
-                pass
+        for img_entry in image_list:
+            img_bytes = None
+            caption = "시상 이미지"
+
+            if isinstance(img_entry, str):
+                # 파일명만 저장된 경우
+                img_bytes = load_image_file(img_entry)
+                caption = img_entry
+            elif isinstance(img_entry, dict):
+                if "filename" in img_entry:
+                    # 신버전: {"filename": "xxx.png", "name": "원본명"}
+                    img_bytes = load_image_file(img_entry["filename"])
+                    caption = img_entry.get("name", img_entry["filename"])
+                elif "data" in img_entry:
+                    # 구버전 호환: base64 dict
+                    try:
+                        img_bytes = base64.standard_b64decode(img_entry["data"])
+                        caption = img_entry.get("name", "시상 이미지")
+                    except Exception:
+                        pass
+
+            if img_bytes:
+                st.image(img_bytes, caption=caption, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -506,7 +550,6 @@ def page_admin():
     if agent != "대리점을 선택하세요" and st.session_state.edit_agent != agent:
         st.session_state.edit_agent = agent
         saved = st.session_state.all_data.get(agent, {})
-        # 구버전(list) / 신버전(dict) 모두 호환
         if isinstance(saved, list):
             st.session_state.edit_awards = copy.deepcopy(saved)
             st.session_state.edit_images = []
@@ -523,9 +566,8 @@ def page_admin():
 
     awards = st.session_state.edit_awards
 
-    # 현황 카드도 구버전 호환
-    def _saved_count(agent):
-        s = st.session_state.all_data.get(agent, {})
+    def _saved_count(ag):
+        s = st.session_state.all_data.get(ag, {})
         if isinstance(s, list):
             return len(s)
         return len(s.get("awards", []))
@@ -548,7 +590,6 @@ def page_admin():
             st.markdown('<p class="admin-sec-title">📷 시상 이미지 업로드 & AI 분석</p>',
                         unsafe_allow_html=True)
 
-            # API 키 직접 입력 (secrets/env 설정 없이도 사용 가능)
             with st.expander("🔑 Anthropic API 키 설정", expanded=not bool(_get_api_key())):
                 manual_key = st.text_input(
                     "API 키를 직접 입력하세요 (sk-ant-...)",
@@ -578,7 +619,6 @@ def page_admin():
             if uploaded:
                 st.image(uploaded, caption="업로드된 시상 이미지", use_container_width=True)
 
-                # 새 파일이면 분석 버튼 활성화
                 file_id = f"{uploaded.name}_{uploaded.size}"
                 already_analyzed = st.session_state.last_uploaded == file_id
 
@@ -602,14 +642,12 @@ def page_admin():
                                     extracted = analyze_image_with_claude(img_bytes, media_type)
 
                                     if extracted:
-                                        # 이미지 base64 저장
-                                        img_b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+                                        # 이미지를 파일로 저장
+                                        filename = save_image_file(agent, img_bytes, uploaded.name)
                                         st.session_state.edit_images.append({
-                                            "data": img_b64,
-                                            "media_type": media_type,
+                                            "filename": filename,
                                             "name": uploaded.name,
                                         })
-                                        # 기존 항목에 병합 (중복 이름 제외)
                                         existing_names = {a["name"] for a in awards}
                                         added = 0
                                         for aw in extracted:
@@ -629,6 +667,27 @@ def page_admin():
                                 except Exception as e:
                                     st.error(f"분석 오류: {e}")
 
+        # ── 저장된 이미지 미리보기 ─────────────────────────────
+        if st.session_state.edit_images:
+            with st.container(border=True):
+                st.markdown('<p class="admin-sec-title">📎 저장된 시상 이미지</p>',
+                            unsafe_allow_html=True)
+                for idx_img, img_entry in enumerate(st.session_state.edit_images):
+                    if isinstance(img_entry, dict) and "filename" in img_entry:
+                        img_bytes = load_image_file(img_entry["filename"])
+                        if img_bytes:
+                            st.image(img_bytes,
+                                     caption=img_entry.get("name", ""),
+                                     use_container_width=True)
+                        ci1, ci2 = st.columns([3, 1])
+                        if ci2.button("🗑 이미지 삭제", key=f"del_img_{idx_img}",
+                                      use_container_width=True):
+                            fp = os.path.join(IMAGE_DIR, img_entry["filename"])
+                            if os.path.exists(fp):
+                                os.remove(fp)
+                            st.session_state.edit_images.pop(idx_img)
+                            st.rerun()
+
         # ── 시상 항목 목록 ─────────────────────────────────────
         with st.container(border=True):
             st.markdown('<p class="admin-sec-title">시상 항목 목록</p>', unsafe_allow_html=True)
@@ -645,12 +704,10 @@ def page_admin():
                     rate_info = (f"{aw['rate']}%" if aw["type"] == "정률"
                                  else f"{len(aw['tiers'])}구간")
                     card_cls = "aw-card editing" if is_editing else "aw-card"
-                    # AI 분석 항목 표시
-                    ai_mark = ""
 
                     st.markdown(f"""
                     <div class="{card_cls}">
-                        <div class="aw-card-name">{aw['name']}{ai_mark}
+                        <div class="aw-card-name">{aw['name']}
                             <span style='font-size:.7rem;background:#f5e5e5;color:#800000;
                             padding:1px 7px;border-radius:20px;margin-left:6px;font-weight:700'>
                             {badge} · {rate_info}</span>
@@ -673,7 +730,6 @@ def page_admin():
         st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
         if st.button("💾  저장 — 대리점 시상 확정", use_container_width=True,
                      type="primary", key="save_btn"):
-            # 구버전(list) 호환: dict가 아니면 dict로 변환
             if agent not in st.session_state.all_data or isinstance(st.session_state.all_data[agent], list):
                 st.session_state.all_data[agent] = {}
             st.session_state.all_data[agent]["awards"] = copy.deepcopy(awards)
@@ -728,6 +784,9 @@ def page_admin():
                     <span style='font-size:.82rem'>항목을 선택하면 수정할 수 있습니다</span>
                 </div>
             </div>""", unsafe_allow_html=True)
+
+    # ── sticky JS 삽입 ────────────────────────────────────────
+    st.components.v1.html(STICKY_JS, height=0)
 
 
 # ══════════════════════════════════════════════════════════════
