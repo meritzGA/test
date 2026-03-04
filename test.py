@@ -369,9 +369,6 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                 share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원\n- 당월실적: {res['val_curr']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
                 for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
             elif res['type'] == "브릿지2":
-                sfh = ""
-                if res.get('shortfall',0) > 0 and res.get('next_tier'):
-                    sfh = f"<div class='shortfall-row'><span class='shortfall-text'>🚀 전월 기준 다음 {int(res['next_tier']//10000)}만 구간까지 {res['shortfall']:,.0f}원 부족</span></div>"
                 # 당월 가동 달성 여부 표시
                 curr_req_val = int(res['curr_req']//10000)
                 if res.get('curr_met'):
@@ -381,10 +378,9 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
                     curr_short = res['curr_req'] - res['val_curr']
                     curr_status = f"<div class='data-row'><span class='data-label'>이번 달 {curr_req_val}만 가동</span><span class='data-value' style='color:#d9232e;font-weight:800;'>❌ 미달 ({curr_short:,.0f}원 부족)</span></div>"
                     prize_label = f"이번 달 {curr_req_val}만 달성 시<br>예상 시상금"
-                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 브릿지 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div><div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div>{sfh}<div class='toss-divider'></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div>{curr_status}<div class='toss-divider'></div><div class='prize-row'><span class='prize-label'>{prize_label}</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
+                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 브릿지 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div><div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div><div class='toss-divider'></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div>{curr_status}<div class='toss-divider'></div><div class='prize-row'><span class='prize-label'>{prize_label}</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
                 met_txt = "달성 ✅" if res.get('curr_met') else "미달 ❌"
                 share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원 (구간: {res['tier']:,.0f}원)\n- 당월실적: {res['val_curr']:,.0f}원 ({curr_req_val}만 가동 {met_txt})\n- 예상시상: {res['prize']:,.0f}원\n"
-                if res.get('shortfall',0) > 0: share_text += f"🚀 전월 기준 다음 {int(res['next_tier']//10000)}만 구간까지 {res['shortfall']:,.0f}원 부족\n"
             st.markdown(ch, unsafe_allow_html=True)
     if cumul_res:
         ch = f"<div class='cumulative-card'><div class='summary-label'>{user_name} 팀장님의 월간 누계 시상</div><div class='summary-total'>{cumul_total:,.0f}원</div><div class='summary-divider'></div>"
