@@ -141,6 +141,7 @@ _defaults = {
     "all_data": None,
     "edit_agent": None,
     "edit_awards": [],     # 현재 편집 중인 시상 목록
+    "edit_images": [],     # 현재 편집 중인 시상 이미지 (base64 리스트)
     "editing_idx": None,   # 수정 폼 열린 인덱스
     "add_mode": False,
     "analyzing": False,
@@ -350,6 +351,21 @@ def page_viewer():
     </table>
     """, unsafe_allow_html=True)
 
+    # ── 시상 이미지 표시 ─────────────────────────────────────
+    images = []
+    if isinstance(_d, dict):
+        images = _d.get("images", [])
+    if images:
+        st.markdown(f'<div class="section-label">{selected} · 시상 계획서 원본</div>',
+                    unsafe_allow_html=True)
+        for img_info in images:
+            try:
+                img_bytes = base64.standard_b64decode(img_info["data"])
+                st.image(img_bytes, caption=img_info.get("name", "시상 이미지"),
+                         use_container_width=True)
+            except Exception:
+                pass
+
 
 # ══════════════════════════════════════════════════════════════
 # 관리자 — 구간 편집기
@@ -493,8 +509,10 @@ def page_admin():
         # 구버전(list) / 신버전(dict) 모두 호환
         if isinstance(saved, list):
             st.session_state.edit_awards = copy.deepcopy(saved)
+            st.session_state.edit_images = []
         else:
             st.session_state.edit_awards = copy.deepcopy(saved.get("awards", []))
+            st.session_state.edit_images = copy.deepcopy(saved.get("images", []))
         st.session_state.editing_idx = None
         st.session_state.add_mode = False
         st.session_state.last_uploaded = None
@@ -584,6 +602,13 @@ def page_admin():
                                     extracted = analyze_image_with_claude(img_bytes, media_type)
 
                                     if extracted:
+                                        # 이미지 base64 저장
+                                        img_b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+                                        st.session_state.edit_images.append({
+                                            "data": img_b64,
+                                            "media_type": media_type,
+                                            "name": uploaded.name,
+                                        })
                                         # 기존 항목에 병합 (중복 이름 제외)
                                         existing_names = {a["name"] for a in awards}
                                         added = 0
@@ -652,6 +677,7 @@ def page_admin():
             if agent not in st.session_state.all_data or isinstance(st.session_state.all_data[agent], list):
                 st.session_state.all_data[agent] = {}
             st.session_state.all_data[agent]["awards"] = copy.deepcopy(awards)
+            st.session_state.all_data[agent]["images"] = copy.deepcopy(st.session_state.edit_images)
             save_data(st.session_state.all_data)
             st.success(f"✅  '{agent}' 시상 항목 저장 완료! ({len(awards)}개)")
 
