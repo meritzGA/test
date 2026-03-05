@@ -488,9 +488,13 @@ def render_kakao_send_btn(msg_key, agent_name, btn_key, height=80):
                 }});
             }}
         }} else {{
-            // 데스크탑: 클립보드 복사
+            // 데스크탑: 복사 후 2.5초 뒤 버튼 원복
             copyToClipboard(function() {{
                 showDone('✅ 복사 완료! 카카오톡 채팅창에 Ctrl+V 하세요.');
+                setTimeout(function() {{
+                    document.getElementById('kd_{btn_key}').style.display = 'none';
+                    document.getElementById('kb_{btn_key}').style.display = 'block';
+                }}, 2500);
             }});
         }}
     }}
@@ -643,29 +647,33 @@ def page_contact():
         cp = (crat / 100) * (ctir + 100000)
         tp = bp + cp
 
-        # ④ 메시지 템플릿 (★ 강조)
-        msg_default = (
-            f"★{aname} 팀장님!★  안녕하세요. {display_mgr} 매니저입니다.\n"
-            f"팀장님 지난 2월 브릿지 실적 ★{br2:,.0f}원★ 하셔서 이번 주 10만원만 하시면 "
-            f"★{bp:,.0f}원★의 브릿지 시상금을 받으실 수 있고\n"
-            f"연속가동 실적 ★{cr2:,.0f}원★ 하셔서 동일하게 10만원만 하시면 "
-            f"★{cp:,.0f}원★을 받으실 수 있으십니다.\n"
-            f"그런데 현재 ★{br3:,.0f}원★ 이셔서 ★{bsf:,.0f}원★이 부족하세요. T_T\n\n"
-            f"오늘까지 꼭 10만원만 하시면 합산 ★{tp:,.0f}원★ 을 받으실 수 있는 엄청난 상황이라 "
-            f"꼭 챙겨 드리려고 연락드렸습니다.\n\n"
-            f"오늘 10만원 하실 수 있는 플랜은 \n"
-            f"1. 가장 체결률 좋은 진단및치료비 + 비통치, 항암 26종 플랜\n"
-            f"2. 지난 달보다 진단비 가격이 10%나 하락한 5.10.5\n"
-            f"3. 새로나온 표적항암 2억에 1만원도 안되는 1.2.3 또또암 플랜 등이 있습니다.\n\n"
-            f"지금 바로 연락주시면 설계 도와드릴께요!\n"
-            f"오늘도 좋은 하루 되시고 시상금 꼭 챙겨가세요!"
-        )
+        # ④ 메시지 템플릿 (★ 강조) — 브릿지실적_3월 >= 10만 이면 달성 메시지
+        achieved = (br3 >= 100000)
+        if achieved:
+            msg_default = f"달성!"
+        else:
+            msg_default = (
+                f"★{aname} 팀장님!★  안녕하세요. {display_mgr} 매니저입니다.\n"
+                f"팀장님 지난 2월 브릿지 실적 ★{br2:,.0f}원★ 하셔서 이번 주 10만원만 하시면 "
+                f"★{bp:,.0f}원★의 브릿지 시상금을 받으실 수 있고\n"
+                f"연속가동 실적 ★{cr2:,.0f}원★ 하셔서 동일하게 10만원만 하시면 "
+                f"★{cp:,.0f}원★을 받으실 수 있으십니다.\n"
+                f"그런데 현재 ★{br3:,.0f}원★ 이셔서 ★{bsf:,.0f}원★이 부족하세요. T_T\n\n"
+                f"오늘까지 꼭 10만원만 하시면 합산 ★{tp:,.0f}원★ 을 받으실 수 있는 엄청난 상황이라 "
+                f"꼭 챙겨 드리려고 연락드렸습니다.\n\n"
+                f"오늘 10만원 하실 수 있는 플랜은 \n"
+                f"1. 가장 체결률 좋은 진단및치료비 + 비통치, 항암 26종 플랜\n"
+                f"2. 지난 달보다 진단비 가격이 10%나 하락한 5.10.5\n"
+                f"3. 새로나온 표적항암 2억에 1만원도 안되는 1.2.3 또또암 플랜 등이 있습니다.\n\n"
+                f"지금 바로 연락주시면 설계 도와드릴께요!\n"
+                f"오늘도 좋은 하루 되시고 시상금 꼭 챙겨가세요!"
+            )
         rows.append(dict(
             idx=i, aname=aname, agency=agency,
             br2=br2, brat=brat, btir=btir,
             cr2=cr2, crat=crat, ctir=ctir,
             br3=br3, bsf=bsf, bp=bp, cp=cp, tp=tp,
-            msg_default=msg_default
+            achieved=achieved, msg_default=msg_default
         ))
 
     # ③ 모바일: 합계 시상금 큰 순 / 데스크탑: 원본 순서 유지
@@ -739,12 +747,19 @@ def page_contact():
 
         for r in rows:
             skey = f"cmsg_{r['idx']}"
-            sf_badge = (f"<span style='color:#d9232e;font-size:0.85rem;font-weight:700;'>"
-                        f"⚠️ {r['bsf']:,.0f}원 부족</span>") if r['bsf'] > 0 else \
-                       "<span style='color:#2e7d32;font-size:0.85rem;font-weight:700;'>✅ 달성</span>"
+            if r['achieved']:
+                sf_badge = "<span style='color:#2e7d32;font-size:0.85rem;font-weight:800;'>🏆 달성!</span>"
+                card_bg  = "#f0faf4"
+                border   = "2px solid #81c995"
+            else:
+                sf_badge = (f"<span style='color:#d9232e;font-size:0.85rem;font-weight:700;'>"
+                            f"⚠️ {r['bsf']:,.0f}원 부족</span>") if r['bsf'] > 0 else \
+                           "<span style='color:#2e7d32;font-size:0.85rem;font-weight:700;'>✅ 달성</span>"
+                card_bg  = "#fff"
+                border   = "1px solid #e5e8eb"
 
             info_html = f"""
-            <div style='background:#fff;border:1px solid #e5e8eb;border-radius:12px;
+            <div style='background:{card_bg};border:{border};border-radius:12px;
                         padding:12px 14px;height:100%;'>
                 <div style='font-size:1.1rem;font-weight:800;color:#191f28;margin-bottom:4px;'>
                     👤 {r['aname']}
@@ -769,7 +784,6 @@ def page_contact():
                     {sf_badge}
                 </div>
             </div>"""
-            st.markdown(f"<div style='display:none' id='inf_{r['idx']}'></div>", unsafe_allow_html=True)
 
             col_info, col_msg, col_btn = st.columns([2, 5, 1], gap="small")
             with col_info:
@@ -780,10 +794,19 @@ def page_contact():
                     value=st.session_state[skey],
                     key=skey,
                     height=210,
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    disabled=r['achieved']
                 )
             with col_btn:
-                render_kakao_send_btn(skey, r['aname'], f"d{r['idx']}", height=225)
+                if r['achieved']:
+                    st.markdown(
+                        "<div style='display:flex;align-items:center;justify-content:center;"
+                        "height:210px;font-size:1.5rem;font-weight:800;color:#2e7d32;"
+                        "text-align:center;'>🏆<br>달성!</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    render_kakao_send_btn(skey, r['aname'], f"d{r['idx']}", height=225)
 
             st.markdown("<hr style='margin:6px 0 10px;opacity:0.1;'>", unsafe_allow_html=True)
 
@@ -792,13 +815,18 @@ def page_contact():
     # ══════════════════════════════════════════════════════
     else:
         for r in rows:
-            skey    = f"cmsg_{r['idx']}"
-            sf_badge = (f"<span class='contact-shortfall'>⚠️ {r['bsf']:,.0f}원 부족</span>") \
-                        if r['bsf'] > 0 else \
-                        "<span style='color:#2e7d32;font-weight:700;'>✅ 달성 완료</span>"
+            skey = f"cmsg_{r['idx']}"
+            if r['achieved']:
+                sf_badge  = "<span style='color:#2e7d32;font-weight:800;font-size:1.05rem;'>🏆 달성!</span>"
+                card_border = "border:2px solid #81c995;background:#f0faf4;"
+            else:
+                sf_badge  = (f"<span class='contact-shortfall'>⚠️ {r['bsf']:,.0f}원 부족</span>") \
+                             if r['bsf'] > 0 else \
+                             "<span style='color:#2e7d32;font-weight:700;'>✅ 달성 완료</span>"
+                card_border = ""
 
             card_html = f"""
-            <div class='contact-card'>
+            <div class='contact-card' style='{card_border}'>
                 <div style='display:flex;justify-content:space-between;
                             align-items:flex-start;margin-bottom:8px;'>
                     <div>
@@ -833,15 +861,26 @@ def page_contact():
             </div>"""
             st.markdown(card_html, unsafe_allow_html=True)
 
-            # ④ 편집 가능한 메시지
-            st.text_area(
-                f"📝 메시지 수정 ({r['aname']})",
-                value=st.session_state[skey],
-                key=skey,
-                height=260,
-                label_visibility="visible"
-            )
-            render_kakao_send_btn(skey, r['aname'], f"m{r['idx']}", height=80)
+            if r['achieved']:
+                # 달성자: 메시지 창(읽기 전용) + 카톡 버튼 없음
+                st.text_area(
+                    f"({r['aname']})",
+                    value=st.session_state[skey],
+                    key=skey,
+                    height=68,
+                    disabled=True,
+                    label_visibility="collapsed"
+                )
+            else:
+                # 미달성: 편집 가능 + 카톡 버튼
+                st.text_area(
+                    f"📝 메시지 수정 ({r['aname']})",
+                    value=st.session_state[skey],
+                    key=skey,
+                    height=260,
+                    label_visibility="visible"
+                )
+                render_kakao_send_btn(skey, r['aname'], f"m{r['idx']}", height=80)
             st.markdown("<hr style='margin:12px 0;opacity:0.12;'>", unsafe_allow_html=True)
 
 
