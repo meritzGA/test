@@ -424,12 +424,9 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
 # ==========================================
 def render_kakao_send_btn(msg_key, agent_name, btn_key, height=80):
     """
-    msg_key: st.session_state 키 → 현재 편집된 메시지 텍스트
-    - 모바일: Web Share API(카카오 공유 대상자 선택 화면) → fallback copy+launch
-    - 데스크탑: 클립보드 복사 + 안내
+    버튼 클릭 시 parent DOM의 textarea 현재값을 직접 읽어 전송.
+    msg_key를 aria-label 검색용 식별자로 사용.
     """
-    msg_text = st.session_state.get(msg_key, "")
-    escaped  = json.dumps(msg_text, ensure_ascii=False)
     html = f"""
     <div id="kw_{btn_key}" style="margin-top:6px;">
       <button id="kb_{btn_key}" onclick="doSend_{btn_key}()"
@@ -443,7 +440,28 @@ def render_kakao_send_btn(msg_key, agent_name, btn_key, height=80):
     </div>
     <script>
     function doSend_{btn_key}() {{
-        var text = {escaped};
+        // 클릭 시점에 parent DOM의 textarea 현재값을 읽음
+        var text = '';
+        try {{
+            var labelKey = '{msg_key}';
+            var parentDoc = window.parent.document;
+            // Streamlit textarea: [data-testid="stTextArea"] 컨테이너 안에
+            // label의 텍스트 내용이 key와 일치하는 textarea를 찾음
+            var containers = parentDoc.querySelectorAll('[data-testid="stTextArea"]');
+            for (var i = 0; i < containers.length; i++) {{
+                var label = containers[i].querySelector('label');
+                var ta    = containers[i].querySelector('textarea');
+                if (ta && label && label.textContent.trim() === labelKey) {{
+                    text = ta.value; break;
+                }}
+            }}
+            // 못 찾으면 aria-label 또는 id로 fallback
+            if (!text) {{
+                var ta2 = parentDoc.querySelector('textarea[aria-label="' + labelKey + '"]') ||
+                          parentDoc.querySelector('textarea[id*="' + labelKey + '"]');
+                if (ta2) text = ta2.value;
+            }}
+        }} catch(e) {{}}
         var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
         function showDone(msg) {{
@@ -701,9 +719,8 @@ def page_contact():
         st.session_state['contact_view'] = 'desktop'; st.rerun()
     is_mobile = st.session_state.get('contact_view','desktop') == 'mobile'
 
-    # ③ 모바일 → 시상금 내림차순
-    if is_mobile:
-        rows.sort(key=lambda r: r['tp'], reverse=True)
+    # 합계 시상금 큰 순 (데스크탑/모바일 공통)
+    rows.sort(key=lambda r: r['tp'], reverse=True)
 
     mgr_label = f"{mgr_name} 매니저" if mgr_name else f"코드 {mgr_code}"
     hdr_c, tog_c = st.columns([9, 1])
@@ -723,7 +740,7 @@ def page_contact():
     if is_mobile:
         st.caption("📱 합계 시상금 큰 순 · 버튼 클릭 시 카카오톡 공유 화면으로 이동")
     else:
-        st.caption("🖥️ 메시지 직접 수정 후 복사 · 데스크탑 1화면 뷰")
+        st.caption("🖥️ 합계 시상금 큰 순 · 메시지 직접 수정 후 복사")
 
     # ── 메시지 세션 초기화 (처음 로드 시 default 삽입) ─────
     for r in rows:
@@ -790,11 +807,11 @@ def page_contact():
                 st.markdown(info_html, unsafe_allow_html=True)
             with col_msg:
                 st.text_area(
-                    f"msg_{r['idx']}",
+                    skey,                        # label = skey → JS 검색용
                     value=st.session_state[skey],
                     key=skey,
                     height=210,
-                    label_visibility="collapsed",
+                    label_visibility="hidden",   # DOM에 label 텍스트 유지, 화면엔 숨김
                     disabled=r['achieved']
                 )
             with col_btn:
@@ -874,11 +891,11 @@ def page_contact():
             else:
                 # 미달성: 편집 가능 + 카톡 버튼
                 st.text_area(
-                    f"📝 메시지 수정 ({r['aname']})",
+                    skey,           # label = skey → JS 검색용
                     value=st.session_state[skey],
                     key=skey,
                     height=260,
-                    label_visibility="visible"
+                    label_visibility="hidden"
                 )
                 render_kakao_send_btn(skey, r['aname'], f"m{r['idx']}", height=80)
             st.markdown("<hr style='margin:12px 0;opacity:0.12;'>", unsafe_allow_html=True)
