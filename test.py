@@ -420,71 +420,83 @@ def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_t
 
 
 # ==========================================
-# 📞 오늘 접촉 대상 - 카카오 메시지 버튼 렌더러
+# 📞 오늘 접촉 대상 - 카카오 전송 컴포넌트
 # ==========================================
-def render_contact_kakao_btn(msg_text, agent_name, btn_key):
-    """데스크탑: 복사 버튼 / 모바일: 복사 후 카카오톡 바로 열기"""
-    escaped = json.dumps(msg_text, ensure_ascii=False)
+def render_kakao_send_btn(msg_key, agent_name, btn_key, height=80):
+    """
+    msg_key: st.session_state 키 → 현재 편집된 메시지 텍스트
+    - 모바일: Web Share API(카카오 공유 대상자 선택 화면) → fallback copy+launch
+    - 데스크탑: 클립보드 복사 + 안내
+    """
+    msg_text = st.session_state.get(msg_key, "")
+    escaped  = json.dumps(msg_text, ensure_ascii=False)
     html = f"""
-    <div id="kb_wrap_{btn_key}">
-        <button class="kakao-btn" id="kb_{btn_key}" onclick="handleKakaoBtn_{btn_key}()">
-            💬 {agent_name} 팀장님께 카카오톡 보내기
-        </button>
-        <div id="kb_done_{btn_key}" style="display:none;color:#2e7d32;font-weight:700;padding:8px 0;text-align:center;">
-            ✅ 메시지 복사 완료!
-        </div>
+    <div id="kw_{btn_key}" style="margin-top:6px;">
+      <button id="kb_{btn_key}" onclick="doSend_{btn_key}()"
+        style="width:100%;padding:13px 8px;background:#FEE500;color:#3C1E1E;border:none;
+               border-radius:12px;font-size:1.05rem;font-weight:800;cursor:pointer;
+               box-shadow:0 3px 8px rgba(0,0,0,0.1);">
+        💬 {agent_name} 팀장님께 카카오톡 보내기
+      </button>
+      <div id="kd_{btn_key}" style="display:none;text-align:center;padding:8px 0;
+           font-weight:700;color:#2e7d32;font-size:0.95rem;"></div>
     </div>
     <script>
-    function handleKakaoBtn_{btn_key}() {{
+    function doSend_{btn_key}() {{
         var text = {escaped};
         var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
-        function onCopied() {{
+        function showDone(msg) {{
             document.getElementById('kb_{btn_key}').style.display = 'none';
-            document.getElementById('kb_done_{btn_key}').style.display = 'block';
-
-            if (isMobile) {{
-                // 모바일: 복사 후 카카오톡 앱 바로 열기
-                setTimeout(function() {{
-                    window.location.href = 'kakaotalk://launch';
-                }}, 300);
-            }} else {{
-                // 데스크탑: 안내 메시지
-                setTimeout(function() {{
-                    document.getElementById('kb_done_{btn_key}').innerHTML =
-                        '✅ 복사 완료! 카카오톡 채팅창에 붙여넣기(Ctrl+V) 하세요.';
-                }}, 100);
-            }}
+            var d = document.getElementById('kd_{btn_key}');
+            d.style.display = 'block';
+            d.innerHTML = msg;
         }}
 
-        if (navigator.clipboard && window.isSecureContext) {{
-            navigator.clipboard.writeText(text).then(onCopied).catch(function() {{
-                // fallback
-                var ta = document.createElement('textarea');
-                ta.value = text;
-                ta.style.position = 'fixed'; ta.style.opacity = '0';
-                document.body.appendChild(ta); ta.select();
-                document.execCommand('copy'); document.body.removeChild(ta);
-                onCopied();
-            }});
-        }} else {{
+        function copyToClipboard(cb) {{
+            if (navigator.clipboard && window.isSecureContext) {{
+                navigator.clipboard.writeText(text).then(cb).catch(function() {{
+                    legacyCopy(); cb();
+                }});
+            }} else {{ legacyCopy(); cb(); }}
+        }}
+
+        function legacyCopy() {{
             var ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed'; ta.style.opacity = '0';
+            ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
             document.body.appendChild(ta); ta.select();
             document.execCommand('copy'); document.body.removeChild(ta);
-            onCopied();
+        }}
+
+        if (isMobile) {{
+            // 모바일: Web Share API → 카카오 대상자 선택 화면
+            if (navigator.share) {{
+                navigator.share({{ text: text }})
+                    .then(function() {{ showDone('✅ 공유 완료!'); }})
+                    .catch(function(e) {{
+                        // 취소하거나 실패 시 copy+launch fallback
+                        copyToClipboard(function() {{
+                            showDone('✅ 복사 완료! 카카오톡에서 붙여넣기 하세요.');
+                            setTimeout(function() {{ window.location.href='kakaotalk://launch'; }}, 400);
+                        }});
+                    }});
+            }} else {{
+                // Web Share 미지원 → copy + kakaotalk://launch
+                copyToClipboard(function() {{
+                    showDone('✅ 복사! 카카오톡 실행 중...');
+                    setTimeout(function() {{ window.location.href='kakaotalk://launch'; }}, 400);
+                }});
+            }}
+        }} else {{
+            // 데스크탑: 클립보드 복사
+            copyToClipboard(function() {{
+                showDone('✅ 복사 완료! 카카오톡 채팅창에 Ctrl+V 하세요.');
+            }});
         }}
     }}
     </script>
-    <style>
-    .kakao-btn {{ display:block; width:100%; padding:14px; background:#FEE500; color:#3C1E1E;
-        border:none; border-radius:12px; font-size:1.1rem; font-weight:800; cursor:pointer;
-        text-align:center; margin-top:8px; box-shadow:0 3px 8px rgba(0,0,0,0.08); }}
-    .kakao-btn:active {{ transform:scale(0.98); }}
-    </style>
     """
-    components.html(html, height=75)
+    components.html(html, height=height)
 
 
 # ==========================================
@@ -493,54 +505,44 @@ def render_contact_kakao_btn(msg_text, agent_name, btn_key):
 def page_contact():
     st.markdown('<div class="title-band">📞 오늘 접촉 대상</div>', unsafe_allow_html=True)
 
-    # 브릿지 컬럼 목록
     BRIDGE_COLS = [
         '브릿지대상_2_3월', '브릿지실적구간_2월', '연속가동대상_2_3월',
         '브릿지실적_2월', '연속가동실적_2월', '연속가동실적구간_2월',
         '브릿지실적_3월', '브릿지부족금액_3월'
     ]
 
-    # ── 브릿지 파일 및 컬럼 탐색 ──────────────────────────────
-    bridge_df = None
-    mgr_code_col = None   # 매니저코드 컬럼
-    agent_name_col = None  # 설계사 이름 컬럼
-    agency_col = None      # 소속(대리점) 컬럼
-    mgr_name_col = None    # 매니저 이름 컬럼
+    # ── 브릿지 파일 탐색 ─────────────────────────────────────
+    bridge_df     = None
+    mgr_code_col  = None
+    agent_name_col= None
+    agency_col    = None
+    mgr_name_col  = None
 
-    # config에서 컬럼 정보 수집
     for cfg in st.session_state.get('config', []):
-        if not mgr_code_col: mgr_code_col = cfg.get('col_manager_code', '') or cfg.get('col_manager', '')
-        if not agent_name_col: agent_name_col = cfg.get('col_name', '')
-        if not agency_col: agency_col = cfg.get('col_agency', '') or cfg.get('col_branch', '')
+        if not mgr_code_col:   mgr_code_col   = cfg.get('col_manager_code','') or cfg.get('col_manager','')
+        if not agent_name_col: agent_name_col = cfg.get('col_name','')
+        if not agency_col:     agency_col     = cfg.get('col_agency','') or cfg.get('col_branch','')
 
-    # 브릿지 컬럼이 가장 많이 포함된 파일 찾기
     best_score = 0
     for fname, df in st.session_state['raw_data'].items():
         score = sum(1 for c in BRIDGE_COLS if c in df.columns)
         if score > best_score:
             best_score = score
-            bridge_df = df
-            # 이 파일에서 추가 컬럼 탐색
+            bridge_df  = df
             for col in df.columns:
-                col_lower = col.lower()
-                if not mgr_code_col and ('매니저코드' in col or '지원매니저코드' in col or '매니저_코드' in col):
-                    mgr_code_col = col
-                if not mgr_name_col and ('매니저명' in col or '지원매니저명' in col or '담당매니저명' in col):
-                    mgr_name_col = col
-                if not agent_name_col and ('성명' in col or '이름' in col or '설계사명' in col):
-                    agent_name_col = col
-                if not agency_col and ('대리점명' in col or '소속' in col or '지사명' in col):
-                    agency_col = col
+                if not mgr_code_col   and any(k in col for k in ('매니저코드','지원매니저코드','매니저_코드')): mgr_code_col   = col
+                if not mgr_name_col   and any(k in col for k in ('매니저명','지원매니저명','담당매니저명')):     mgr_name_col   = col
+                if not agent_name_col and any(k in col for k in ('성명','이름','설계사명')):                    agent_name_col = col
+                if not agency_col     and any(k in col for k in ('대리점명','소속','지사명')):                  agency_col     = col
 
     if bridge_df is None or best_score == 0:
-        st.warning("⚠️ 브릿지 데이터 파일을 찾을 수 없습니다. 관리자 화면에서 브릿지 파일을 먼저 업로드해주세요.")
+        st.warning("⚠️ 브릿지 데이터 파일을 찾을 수 없습니다. 관리자 화면에서 업로드해주세요.")
         st.info(f"필요 컬럼: {', '.join(BRIDGE_COLS)}")
         return
 
-    found_cols = [c for c in BRIDGE_COLS if c in bridge_df.columns]
     missing_cols = [c for c in BRIDGE_COLS if c not in bridge_df.columns]
     if missing_cols:
-        st.warning(f"⚠️ 일부 컬럼이 없습니다 (없음: {', '.join(missing_cols)})")
+        st.warning(f"⚠️ 일부 컬럼 없음: {', '.join(missing_cols)}")
 
     # ── 로그인 ────────────────────────────────────────────────
     if 'contact_logged_in' not in st.session_state:
@@ -551,169 +553,296 @@ def page_contact():
         mgr_input = st.text_input("매니저 코드", type="password", placeholder="예: 12345", label_visibility="collapsed")
         if st.button("접촉 대상 조회하기", type="primary"):
             if not mgr_input:
-                st.warning("매니저 코드를 입력해주세요.")
+                st.warning("코드를 입력해주세요.")
             else:
-                sic = safe_str(mgr_input)
+                sic   = safe_str(mgr_input)
                 found = False
-                # 브릿지 파일에서 확인
                 if mgr_code_col and mgr_code_col in bridge_df.columns:
-                    if sic in get_clean_series(bridge_df, mgr_code_col).unique():
-                        found = True
-                # config 데이터에서도 확인
+                    if sic in get_clean_series(bridge_df, mgr_code_col).unique(): found = True
                 if not found:
                     for ci, cfg in enumerate(st.session_state.get('config', [])):
-                        mc = cfg.get('col_manager_code', '') or cfg.get('col_manager', '')
+                        mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
                         if mc:
                             df = _get_merged_df(ci)
                             if df is not None and mc in df.columns:
                                 if sic in get_clean_series(df, mc).unique():
-                                    found = True
-                                    if not mgr_code_col: mgr_code_col = mc
-                                    break
+                                    found = True; mgr_code_col = mc; break
                 if found:
-                    st.session_state.contact_logged_in = True
-                    st.session_state.contact_mgr_code = sic
+                    st.session_state.contact_logged_in  = True
+                    st.session_state.contact_mgr_code   = sic
+                    # 메시지 캐시 초기화
+                    for k in list(st.session_state.keys()):
+                        if k.startswith('cmsg_'): del st.session_state[k]
                     st.rerun()
                 else:
-                    st.error(f"❌ 입력하신 코드 '{mgr_input}'가 데이터에 존재하지 않습니다.")
+                    st.error(f"❌ 코드 '{mgr_input}'가 데이터에 없습니다.")
         return
 
     # ── 로그인 성공 ──────────────────────────────────────────
     mgr_code = st.session_state.contact_mgr_code
-
-    col_logout, _ = st.columns([2, 8])
-    with col_logout:
+    col_lo, _ = st.columns([2, 8])
+    with col_lo:
         if st.button("🚪 로그아웃"):
             st.session_state.contact_logged_in = False
             st.rerun()
 
-    # 매니저 이름 조회
+    # 매니저 이름
     mgr_name = ""
     if mgr_name_col and mgr_name_col in bridge_df.columns and mgr_code_col and mgr_code_col in bridge_df.columns:
-        mask = get_clean_series(bridge_df, mgr_code_col) == mgr_code
-        mdf = bridge_df[mask]
-        if not mdf.empty:
-            mgr_name = _clean_excel_text(safe_str(mdf[mgr_name_col].values[0]))
+        mdf = bridge_df[get_clean_series(bridge_df, mgr_code_col) == mgr_code]
+        if not mdf.empty: mgr_name = _clean_excel_text(safe_str(mdf[mgr_name_col].values[0]))
     if not mgr_name:
-        # config 데이터에서도 매니저명 시도
         for ci, cfg in enumerate(st.session_state.get('config', [])):
-            mc = cfg.get('col_manager_code', '') or cfg.get('col_manager', '')
-            mn = cfg.get('col_manager_name', '')
+            mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
+            mn = cfg.get('col_manager_name','')
             if mc and mn:
                 df = _get_merged_df(ci)
                 if df is not None and mc in df.columns and mn in df.columns:
-                    mask = get_clean_series(df, mc) == mgr_code
-                    mdf = df[mask]
-                    if not mdf.empty:
-                        mgr_name = _clean_excel_text(safe_str(mdf[mn].values[0]))
-                        break
+                    mdf = df[get_clean_series(df, mc) == mgr_code]
+                    if not mdf.empty: mgr_name = _clean_excel_text(safe_str(mdf[mn].values[0])); break
 
-    # ── 접촉 대상 필터링 ────────────────────────────────────
-    if mgr_code_col and mgr_code_col in bridge_df.columns:
-        mask = get_clean_series(bridge_df, mgr_code_col) == mgr_code
-        my_df = bridge_df[mask].copy().reset_index(drop=True)
-    else:
-        st.error("⚠️ 매니저 코드 컬럼을 찾을 수 없습니다. 관리자 화면에서 설정을 확인해주세요.")
+    display_mgr = mgr_name if mgr_name else mgr_code
+
+    # ── 데이터 필터 & 계산 ──────────────────────────────────
+    if not (mgr_code_col and mgr_code_col in bridge_df.columns):
+        st.error("⚠️ 매니저 코드 컬럼을 찾을 수 없습니다.")
         return
 
-    if my_df.empty:
+    raw_df = bridge_df[get_clean_series(bridge_df, mgr_code_col) == mgr_code].copy().reset_index(drop=True)
+    if raw_df.empty:
         st.info("해당 매니저의 접촉 대상이 없습니다.")
         return
 
-    # ── 헤더 ─────────────────────────────────────────────────
+    # ① 필터: 브릿지실적_2월 >= 100,000
+    if '브릿지실적_2월' in raw_df.columns:
+        raw_df = raw_df[raw_df['브릿지실적_2월'].apply(safe_float) >= 100000].reset_index(drop=True)
+
+    if raw_df.empty:
+        st.info("브릿지실적_2월 10만원 이상인 접촉 대상이 없습니다.")
+        return
+
+    # 전체 계산 → rows 리스트
+    rows = []
+    for i, row in raw_df.iterrows():
+        def gv(col, r=row):
+            return safe_float(r.get(col, 0))
+
+        aname  = _clean_excel_text(safe_str(row[agent_name_col])) if agent_name_col and agent_name_col in row.index else f"설계사{i+1}"
+        agency = _clean_excel_text(safe_str(row[agency_col]))     if agency_col     and agency_col     in row.index else ""
+
+        br2  = gv('브릿지실적_2월')
+        brat = gv('브릿지대상_2_3월')
+        btir = gv('브릿지실적구간_2월')
+        cr2  = gv('연속가동실적_2월')
+        crat = gv('연속가동대상_2_3월')
+        ctir = gv('연속가동실적구간_2월')
+        br3  = gv('브릿지실적_3월')
+        bsf  = gv('브릿지부족금액_3월')
+
+        bp = (brat / 100) * (btir + 100000)
+        cp = (crat / 100) * (ctir + 100000)
+        tp = bp + cp
+
+        # ④ 메시지 템플릿 (★ 강조)
+        msg_default = (
+            f"★{aname} 팀장님!★  안녕하세요. {display_mgr} 매니저입니다.\n"
+            f"팀장님 지난 2월 브릿지 실적 ★{br2:,.0f}원★ 하셔서 이번 주 10만원만 하시면 "
+            f"★{bp:,.0f}원★의 브릿지 시상금을 받으실 수 있고\n"
+            f"연속가동 실적 ★{cr2:,.0f}원★ 하셔서 동일하게 10만원만 하시면 "
+            f"★{cp:,.0f}원★을 받으실 수 있으십니다.\n"
+            f"그런데 현재 ★{br3:,.0f}원★ 이셔서 ★{bsf:,.0f}원★이 부족하세요. T_T\n\n"
+            f"오늘까지 꼭 10만원만 하시면 합산 ★{tp:,.0f}원★ 을 받으실 수 있는 엄청난 상황이라 "
+            f"꼭 챙겨 드리려고 연락드렸습니다.\n\n"
+            f"오늘 10만원 하실 수 있는 플랜은 \n"
+            f"1. 가장 체결률 좋은 진단및치료비 + 비통치, 항암 26종 플랜\n"
+            f"2. 지난 달보다 진단비 가격이 10%나 하락한 5.10.5\n"
+            f"3. 새로나온 표적항암 2억에 1만원도 안되는 1.2.3 또또암 플랜 등이 있습니다.\n\n"
+            f"지금 바로 연락주시면 설계 도와드릴께요!\n"
+            f"오늘도 좋은 하루 되시고 시상금 꼭 챙겨가세요!"
+        )
+        rows.append(dict(
+            idx=i, aname=aname, agency=agency,
+            br2=br2, brat=brat, btir=btir,
+            cr2=cr2, crat=crat, ctir=ctir,
+            br3=br3, bsf=bsf, bp=bp, cp=cp, tp=tp,
+            msg_default=msg_default
+        ))
+
+    # ③ 모바일: 합계 시상금 큰 순 / 데스크탑: 원본 순서 유지
+    is_mobile = st.session_state.get('contact_view', 'desktop') == 'mobile'
+
+    # 뷰 모드 JS 감지 + 토글 버튼
+    components.html("""<script>
+    (function(){
+        try {
+            var w = window.parent.innerWidth || window.innerWidth;
+            var sp = new URLSearchParams(window.parent.location.search);
+            if (!sp.has('cv_set')) {
+                sp.set('cv_set','1');
+                sp.set('cv', w<=768 ? 'mobile' : 'desktop');
+                window.parent.history.replaceState({},'',window.parent.location.pathname+'?'+sp.toString());
+                window.parent.location.reload();
+            }
+        } catch(e){}
+    })();
+    </script>""", height=0)
+    qp = st.query_params
+    if qp.get('cv') == 'mobile'  and st.session_state.get('contact_view') != 'mobile':
+        st.session_state['contact_view'] = 'mobile';  st.rerun()
+    if qp.get('cv') == 'desktop' and st.session_state.get('contact_view') != 'desktop':
+        st.session_state['contact_view'] = 'desktop'; st.rerun()
+    is_mobile = st.session_state.get('contact_view','desktop') == 'mobile'
+
+    # ③ 모바일 → 시상금 내림차순
+    if is_mobile:
+        rows.sort(key=lambda r: r['tp'], reverse=True)
+
     mgr_label = f"{mgr_name} 매니저" if mgr_name else f"코드 {mgr_code}"
-    st.markdown(f"<h3 class='main-title'>📋 {mgr_label}님의 오늘 접촉 대상 — 총 {len(my_df)}명</h3>", unsafe_allow_html=True)
-    st.caption("💡 모바일: 버튼 클릭 시 메시지 복사 후 카카오톡 자동 실행 / 데스크탑: 복사 후 채팅창에 붙여넣기")
+    hdr_c, tog_c = st.columns([9, 1])
+    with hdr_c:
+        st.markdown(
+            f"<h3 class='main-title' style='margin-bottom:4px;'>📋 {mgr_label}님 접촉 대상 — {len(rows)}명</h3>",
+            unsafe_allow_html=True
+        )
+    with tog_c:
+        cur_icon = "📱" if is_mobile else "🖥️"
+        if st.button(cur_icon, key="cv_tog"):
+            nxt = 'desktop' if is_mobile else 'mobile'
+            st.session_state['contact_view'] = nxt
+            st.query_params['cv'] = nxt
+            st.rerun()
 
-    # ── 대상자 카드 루프 ─────────────────────────────────────
-    for idx, row in my_df.iterrows():
+    if is_mobile:
+        st.caption("📱 합계 시상금 큰 순 · 버튼 클릭 시 카카오톡 공유 화면으로 이동")
+    else:
+        st.caption("🖥️ 메시지 직접 수정 후 복사 · 데스크탑 1화면 뷰")
 
-        def gv(col, default=0.0):
-            v = row.get(col, default)
-            return safe_float(v)
+    # ── 메시지 세션 초기화 (처음 로드 시 default 삽입) ─────
+    for r in rows:
+        skey = f"cmsg_{r['idx']}"
+        if skey not in st.session_state:
+            st.session_state[skey] = r['msg_default']
 
-        # 필드 추출
-        agent_name = ""
-        if agent_name_col and agent_name_col in row.index:
-            agent_name = _clean_excel_text(safe_str(row[agent_name_col]))
-        if not agent_name: agent_name = f"설계사{idx+1}"
+    # ══════════════════════════════════════════════════════
+    # 🖥️ 데스크탑 뷰: 1줄 = 정보 | 메시지 편집 | 버튼
+    # ══════════════════════════════════════════════════════
+    if not is_mobile:
+        # 헤더 행
+        st.markdown("""
+        <div style='display:grid;grid-template-columns:220px 1fr 160px;gap:10px;
+                    padding:8px 12px;background:#f0f2f5;border-radius:10px;
+                    font-weight:700;color:#8b95a1;font-size:0.9rem;margin-bottom:6px;'>
+            <div>대상자 / 소속</div>
+            <div>카카오톡 메시지 (직접 수정 가능)</div>
+            <div style='text-align:center;'>전송</div>
+        </div>""", unsafe_allow_html=True)
 
-        agency = ""
-        if agency_col and agency_col in row.index:
-            agency = _clean_excel_text(safe_str(row[agency_col]))
+        for r in rows:
+            skey = f"cmsg_{r['idx']}"
+            sf_badge = (f"<span style='color:#d9232e;font-size:0.85rem;font-weight:700;'>"
+                        f"⚠️ {r['bsf']:,.0f}원 부족</span>") if r['bsf'] > 0 else \
+                       "<span style='color:#2e7d32;font-size:0.85rem;font-weight:700;'>✅ 달성</span>"
 
-        bridge_rate     = gv('브릿지대상_2_3월')       # %
-        bridge_tier     = gv('브릿지실적구간_2월')      # 원
-        cont_rate       = gv('연속가동대상_2_3월')       # %
-        bridge_perf_2   = gv('브릿지실적_2월')          # 원
-        cont_perf_2     = gv('연속가동실적_2월')         # 원
-        cont_tier       = gv('연속가동실적구간_2월')     # 원
-        bridge_perf_3   = gv('브릿지실적_3월')          # 원
-        bridge_shortfall= gv('브릿지부족금액_3월')       # 원
-
-        # 시상금 계산
-        bridge_prize = (bridge_rate / 100) * (bridge_tier + 100000)
-        cont_prize   = (cont_rate   / 100) * (cont_tier   + 100000)
-        total_prize  = bridge_prize + cont_prize
-
-        # 메시지 생성
-        display_mgr = mgr_name if mgr_name else mgr_code
-        msg = f"""{agent_name} 팀장님!  안녕하세요. {display_mgr} 매니저입니다.
-팀장님 지난 2월 브릿지 실적 {bridge_perf_2:,.0f}원 하셔서 이번 주 10만원만 하시면 {bridge_prize:,.0f}원의 브릿지 시상금을 받으실 수 있고
-연속가동 실적 {cont_perf_2:,.0f}원 하셔서 동일하게 10만원만 하시면 {cont_prize:,.0f}원을 받으실 수 있으십니다.
-그런데 현재 {bridge_perf_3:,.0f}원 이셔서 {bridge_shortfall:,.0f}원이 부족하세요. T_T
-
-오늘까지 꼭 10만원만 하시면 합산 {total_prize:,.0f}원 을 받으실 수 있는 엄청난 상황이라 꼭 챙겨 드리려고 연락드렸습니다.
-
-오늘 10만원 하실 수 있는 플랜은 
-1. 가장 체결률 좋은 진단및치료비 + 비통치, 항암 26종 플랜
-2. 지난 달보다 진단비 가격이 10%나 하락한 5.10.5
-3. 새로나온 표적항암 2억에 1만원도 안되는 1.2.3 또또암 플랜 등이 있습니다.
-
-지금 바로 연락주시면 설계 도와드릴께요!
-오늘도 좋은 하루 되시고 시상금 꼭 챙겨가세요!"""
-
-        # 카드 HTML
-        org_text = f"📍 {agency}" if agency else ""
-        shortfall_badge = f"<span class='contact-shortfall'>⚠️ {bridge_shortfall:,.0f}원 부족</span>" if bridge_shortfall > 0 else "<span style='color:#2e7d32;font-weight:700;'>✅ 달성 완료</span>"
-
-        card_html = f"""
-        <div class='contact-card'>
-            <div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;'>
-                <div>
-                    <div class='contact-name'>👤 {agent_name} 팀장님</div>
-                    <div class='contact-org'>{org_text}</div>
+            info_html = f"""
+            <div style='background:#fff;border:1px solid #e5e8eb;border-radius:12px;
+                        padding:12px 14px;height:100%;'>
+                <div style='font-size:1.1rem;font-weight:800;color:#191f28;margin-bottom:4px;'>
+                    👤 {r['aname']}
                 </div>
-                <div class='contact-prize-total'>💰 {total_prize:,.0f}원</div>
-            </div>
-            <div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;'>
-                <div style='flex:1;min-width:130px;background:#fff8f8;border-radius:10px;padding:10px 12px;'>
-                    <div style='font-size:0.95rem;color:#8b95a1;margin-bottom:2px;'>브릿지 시상</div>
-                    <div style='font-size:1.2rem;font-weight:800;color:rgb(128,0,0);'>{bridge_prize:,.0f}원</div>
-                    <div style='font-size:0.9rem;color:#aaa;'>2월 실적 {bridge_perf_2:,.0f}원</div>
+                <div style='font-size:0.9rem;color:#8b95a1;margin-bottom:8px;'>
+                    📍 {r['agency'] if r['agency'] else '—'}
                 </div>
-                <div style='flex:1;min-width:130px;background:#f8f8ff;border-radius:10px;padding:10px 12px;'>
-                    <div style='font-size:0.95rem;color:#8b95a1;margin-bottom:2px;'>연속가동 시상</div>
-                    <div style='font-size:1.2rem;font-weight:800;color:#1e3c72;'>{cont_prize:,.0f}원</div>
-                    <div style='font-size:0.9rem;color:#aaa;'>2월 실적 {cont_perf_2:,.0f}원</div>
+                <div style='background:#fff8f8;border-radius:8px;padding:6px 10px;margin-bottom:4px;'>
+                    <span style='font-size:0.8rem;color:#8b95a1;'>브릿지</span>
+                    <span style='font-size:1.05rem;font-weight:800;color:rgb(128,0,0);
+                                float:right;'>{r['bp']:,.0f}원</span>
                 </div>
-            </div>
-            <div style='display:flex;justify-content:space-between;align-items:center;padding:8px 0 2px;'>
-                <span style='color:#8b95a1;font-size:0.95rem;'>3월 현재 실적: {bridge_perf_3:,.0f}원</span>
-                {shortfall_badge}
-            </div>
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
+                <div style='background:#f8f8ff;border-radius:8px;padding:6px 10px;margin-bottom:6px;'>
+                    <span style='font-size:0.8rem;color:#8b95a1;'>연속가동</span>
+                    <span style='font-size:1.05rem;font-weight:800;color:#1e3c72;
+                                float:right;'>{r['cp']:,.0f}원</span>
+                </div>
+                <div style='display:flex;justify-content:space-between;align-items:center;'>
+                    <span style='font-size:1.15rem;font-weight:800;color:rgb(128,0,0);'>
+                        💰 {r['tp']:,.0f}원
+                    </span>
+                    {sf_badge}
+                </div>
+            </div>"""
+            st.markdown(f"<div style='display:none' id='inf_{r['idx']}'></div>", unsafe_allow_html=True)
 
-        # 메시지 미리보기 토글
-        with st.expander("📝 메시지 미리보기"):
-            st.markdown(f"<div class='msg-preview'>{msg.replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
+            col_info, col_msg, col_btn = st.columns([2, 5, 1], gap="small")
+            with col_info:
+                st.markdown(info_html, unsafe_allow_html=True)
+            with col_msg:
+                st.text_area(
+                    f"msg_{r['idx']}",
+                    value=st.session_state[skey],
+                    key=skey,
+                    height=210,
+                    label_visibility="collapsed"
+                )
+            with col_btn:
+                render_kakao_send_btn(skey, r['aname'], f"d{r['idx']}", height=225)
 
-        # 카카오 버튼
-        render_contact_kakao_btn(msg, agent_name, f"c{idx}_{mgr_code}")
+            st.markdown("<hr style='margin:6px 0 10px;opacity:0.1;'>", unsafe_allow_html=True)
 
-        st.markdown("<hr style='margin:8px 0 16px;opacity:0.12;'>", unsafe_allow_html=True)
+    # ══════════════════════════════════════════════════════
+    # 📱 모바일 뷰: 카드 → 메시지 편집 → 전송 버튼
+    # ══════════════════════════════════════════════════════
+    else:
+        for r in rows:
+            skey    = f"cmsg_{r['idx']}"
+            sf_badge = (f"<span class='contact-shortfall'>⚠️ {r['bsf']:,.0f}원 부족</span>") \
+                        if r['bsf'] > 0 else \
+                        "<span style='color:#2e7d32;font-weight:700;'>✅ 달성 완료</span>"
+
+            card_html = f"""
+            <div class='contact-card'>
+                <div style='display:flex;justify-content:space-between;
+                            align-items:flex-start;margin-bottom:8px;'>
+                    <div>
+                        <div class='contact-name'>👤 {r['aname']} 팀장님</div>
+                        <div class='contact-org'>📍 {r['agency'] if r['agency'] else '—'}</div>
+                    </div>
+                    <div class='contact-prize-total'>💰 {r['tp']:,.0f}원</div>
+                </div>
+                <div style='display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;'>
+                    <div style='flex:1;min-width:120px;background:#fff8f8;
+                                border-radius:10px;padding:8px 10px;'>
+                        <div style='font-size:0.85rem;color:#8b95a1;'>브릿지 시상</div>
+                        <div style='font-size:1.15rem;font-weight:800;
+                                    color:rgb(128,0,0);'>{r['bp']:,.0f}원</div>
+                        <div style='font-size:0.8rem;color:#aaa;'>2월 {r['br2']:,.0f}원</div>
+                    </div>
+                    <div style='flex:1;min-width:120px;background:#f8f8ff;
+                                border-radius:10px;padding:8px 10px;'>
+                        <div style='font-size:0.85rem;color:#8b95a1;'>연속가동 시상</div>
+                        <div style='font-size:1.15rem;font-weight:800;
+                                    color:#1e3c72;'>{r['cp']:,.0f}원</div>
+                        <div style='font-size:0.8rem;color:#aaa;'>2월 {r['cr2']:,.0f}원</div>
+                    </div>
+                </div>
+                <div style='display:flex;justify-content:space-between;
+                            align-items:center;padding:6px 0 2px;'>
+                    <span style='color:#8b95a1;font-size:0.9rem;'>
+                        3월 현재: {r['br3']:,.0f}원
+                    </span>
+                    {sf_badge}
+                </div>
+            </div>"""
+            st.markdown(card_html, unsafe_allow_html=True)
+
+            # ④ 편집 가능한 메시지
+            st.text_area(
+                f"📝 메시지 수정 ({r['aname']})",
+                value=st.session_state[skey],
+                key=skey,
+                height=260,
+                label_visibility="visible"
+            )
+            render_kakao_send_btn(skey, r['aname'], f"m{r['idx']}", height=80)
+            st.markdown("<hr style='margin:12px 0;opacity:0.12;'>", unsafe_allow_html=True)
 
 
 # ==========================================
