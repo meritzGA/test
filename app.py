@@ -35,7 +35,7 @@ st.markdown("""
 
 
 # ═══════════════════════════════════════
-# 유틸 함수
+# 유틸
 # ═══════════════════════════════════════
 
 def apply_filter(df, f):
@@ -84,6 +84,7 @@ if "df" not in st.session_state:
     st.session_state.filename = ""
     st.session_state.filter_count = 0
     st.session_state.delete_log = 0
+    st.session_state.select_mode = None  # None, "all", "none", "invert"
 
 
 # ═══════════════════════════════════════
@@ -101,13 +102,13 @@ with st.sidebar:
     if uploaded:
         try:
             raw = load_file(uploaded)
-            # 내부 추적용 ID 부여
             raw.insert(0, "_idx", range(len(raw)))
             st.session_state.df = raw.copy()
             st.session_state.df_original = raw.copy()
             st.session_state.filename = uploaded.name
             st.session_state.filter_count = 0
             st.session_state.delete_log = 0
+            st.session_state.select_mode = None
         except Exception as e:
             st.error(f"파일 읽기 실패: {e}")
 
@@ -146,7 +147,7 @@ with st.sidebar:
         sort_dir = st.radio("방향", ["오름차순", "내림차순"], horizontal=True)
 
         st.markdown("---")
-        st.markdown("### ✏️ 일괄 수정")
+        st.markdown("### ✏️ 일괄 수정 (필터 기준)")
         st.caption("현재 필터 조건에 해당하는 행의 특정 필드를 일괄 변경합니다.")
         bulk_field = st.selectbox("수정할 필드", [""] + user_fields, key="bulk_f")
         bulk_value = st.text_input("변경할 값", key="bulk_v")
@@ -238,35 +239,74 @@ with c4:
 
 st.markdown("")
 
-# ── 선택 체크박스 + 데이터 테이블 ──
-# 선택용 컬럼 추가
-display = view.copy()
-display.insert(0, "선택", False)
+# ── 선택 버튼 ──
+sel_cols = st.columns([1, 1, 1, 3])
+with sel_cols[0]:
+    if st.button("☑️ 모두 선택", use_container_width=True):
+        st.session_state.select_mode = "all"
+        st.rerun()
+with sel_cols[1]:
+    if st.button("⬜ 모두 해제", use_container_width=True):
+        st.session_state.select_mode = "none"
+        st.rerun()
+with sel_cols[2]:
+    if st.button("🔀 선택 반전", use_container_width=True):
+        st.session_state.select_mode = "invert"
+        st.rerun()
 
-# _idx 숨기고 표시
+# ── 선택 상태 결정 ──
+mode = st.session_state.select_mode
+if mode == "all":
+    default_selection = [True] * len(view)
+elif mode == "none":
+    default_selection = [False] * len(view)
+else:
+    default_selection = [False] * len(view)
+
+display = view.copy().reset_index(drop=True)
+display.insert(0, "선택", default_selection[:len(display)])
+
+# select_mode 초기화 (반전은 아래에서 처리)
+if mode == "invert":
+    # 이전 에디터 상태에서 반전 처리
+    prev_key = "main_editor"
+    if prev_key in st.session_state and "edited_rows" in st.session_state[prev_key]:
+        edited_rows = st.session_state[prev_key]["edited_rows"]
+        inverted = []
+        for i in range(len(display)):
+            was_selected = edited_rows.get(str(i), {}).get("선택", False) if str(i) in edited_rows else False
+            inverted.append(not was_selected)
+        display["선택"] = inverted
+    else:
+        display["선택"] = [True] * len(display)
+
+# 선택 모드 리셋
+st.session_state.select_mode = None
+
+# ── 데이터 에디터 ──
 edited = st.data_editor(
     display[["선택"] + user_fields + ["_idx"]],
     use_container_width=True,
     height=500,
     column_config={
         "선택": st.column_config.CheckboxColumn("선택", default=False, width="small"),
-        "_idx": None,  # 숨김
+        "_idx": None,
     },
     disabled=["_idx"],
     hide_index=True,
     key="main_editor",
 )
 
-# ── 액션 버튼 ──
-st.markdown("")
-btn_cols = st.columns([1, 1, 1, 3])
-
-# 선택된 행 파악
+# ── 선택 결과 집계 ──
 selected_mask = edited["선택"] == True
 selected_count = int(selected_mask.sum())
 selected_idxs = edited.loc[selected_mask, "_idx"].tolist()
 
-with btn_cols[0]:
+# ── 액션 버튼 ──
+st.markdown("")
+act_cols = st.columns([1.5, 1, 1.5, 2.5])
+
+with act_cols[0]:
     delete_clicked = st.button(
         f"🗑️ 선택 삭제 ({selected_count}건)",
         use_container_width=True,
@@ -274,46 +314,52 @@ with btn_cols[0]:
         type="primary" if selected_count > 0 else "secondary",
     )
 
-with btn_cols[1]:
-    edit_field = st.selectbox("필드", [""] + user_fields, key="sel_edit_f", label_visibility="collapsed")
+with act_cols[1]:
+    edit_field = st.selectbox("필드", [""] + user_fields, key="sel_edit_f", label_visibility="collapsed",
+                               placeholder="수정 필드")
 
-with btn_cols[2]:
-    edit_value = st.text_input("값", key="sel_edit_v", label_visibility="collapsed", placeholder="선택 항목 일괄 변경값")
+with act_cols[2]:
+    edit_value = st.text_input("값", key="sel_edit_v", label_visibility="collapsed",
+                                placeholder="변경할 값 입력")
 
-# 선택 삭제 실행
+with act_cols[3]:
+    edit_clicked = st.button(
+        f"✏️ 선택 항목 수정 ({selected_count}건)",
+        use_container_width=True,
+        disabled=(selected_count == 0 or not edit_field),
+    )
+
+# 선택 삭제
 if delete_clicked and selected_count > 0:
     st.session_state.df = master[~master["_idx"].isin(selected_idxs)].reset_index(drop=True)
     st.session_state.delete_log += selected_count
     st.toast(f"✅ {selected_count}건 삭제 완료")
     st.rerun()
 
-# 선택 항목 필드 일괄 수정
-if selected_count > 0 and edit_field:
-    if st.button("✏️ 선택 항목 수정", key="sel_edit_btn"):
-        mask = master["_idx"].isin(selected_idxs)
-        st.session_state.df.loc[mask, edit_field] = edit_value
-        st.toast(f"✅ {selected_count}건 '{edit_field}' → '{edit_value}' 수정")
-        st.rerun()
+# 선택 항목 수정
+if edit_clicked and selected_count > 0 and edit_field:
+    mask = st.session_state.df["_idx"].isin(selected_idxs)
+    st.session_state.df.loc[mask, edit_field] = edit_value
+    st.toast(f"✅ {selected_count}건 '{edit_field}' → '{edit_value}' 수정")
+    st.rerun()
 
 # ── 인라인 편집 반영 ──
-# 에디터에서 직접 수정한 내용을 원본에 반영
 if edited is not None:
     for _, row in edited.iterrows():
         idx_val = row["_idx"]
-        mask = master["_idx"] == idx_val
-        if mask.any():
+        m = master["_idx"] == idx_val
+        if m.any():
             for col in user_fields:
                 if col in row.index:
-                    new_val = row[col]
-                    old_val = master.loc[mask, col].values[0]
-                    if str(new_val) != str(old_val):
+                    new_val = str(row[col])
+                    old_val = str(master.loc[m, col].values[0])
+                    if new_val != old_val:
                         st.session_state.df.loc[st.session_state.df["_idx"] == idx_val, col] = new_val
 
 # ── 다운로드 ──
 st.markdown("---")
 dc1, dc2, dc3 = st.columns([1, 1, 4])
 
-# 다운로드 시 _idx 제거
 export_df = st.session_state.df[user_fields]
 
 with dc1:
