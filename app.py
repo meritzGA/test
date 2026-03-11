@@ -71,17 +71,29 @@ def load_file(uploaded):
             return pd.read_csv(uploaded, dtype=str, encoding="cp949").fillna("")
 
 
+def get_filters():
+    """세션에서 현재 활성 필터 목록을 읽어옴"""
+    filters = []
+    for i in range(st.session_state.get("filter_count", 0)):
+        fld = st.session_state.get(f"ff_{i}", "")
+        op = st.session_state.get(f"fo_{i}", "포함")
+        val = st.session_state.get(f"fv_{i}", "")
+        if fld:
+            filters.append({"field": fld, "op": op, "value": val})
+    return filters
+
+
 # ═══════════════════════════════════════
 # 세션 초기화
 # ═══════════════════════════════════════
 
-if "df" not in st.session_state:
-    st.session_state.df = None
-    st.session_state.df_original = None
-    st.session_state.filename = ""
-    st.session_state.filter_count = 0
-    st.session_state.delete_log = 0
-    st.session_state.select_all = False  # True면 전체선택, False면 전체해제
+for key, default in [
+    ("df", None), ("df_original", None), ("filename", ""),
+    ("filter_count", 0), ("delete_log", 0), ("select_all", False),
+    ("uploaded_file_id", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # ═══════════════════════════════════════
@@ -96,22 +108,29 @@ with st.sidebar:
         "파일 업로드", type=["csv", "xlsx", "xls", "tsv", "txt"],
         help="CSV, Excel, TSV 파일 지원"
     )
-    if uploaded:
-        try:
-            raw = load_file(uploaded)
-            raw.insert(0, "_idx", range(len(raw)))
-            st.session_state.df = raw.copy()
-            st.session_state.df_original = raw.copy()
-            st.session_state.filename = uploaded.name
-            st.session_state.filter_count = 0
-            st.session_state.delete_log = 0
-            st.session_state.select_all = False
-        except Exception as e:
-            st.error(f"파일 읽기 실패: {e}")
+
+    # ★ 새 파일일 때만 처리 (이름+사이즈로 판별)
+    if uploaded is not None:
+        file_id = f"{uploaded.name}_{uploaded.size}"
+        if file_id != st.session_state.uploaded_file_id:
+            try:
+                raw = load_file(uploaded)
+                raw.insert(0, "_idx", range(len(raw)))
+                st.session_state.df = raw.copy()
+                st.session_state.df_original = raw.copy()
+                st.session_state.filename = uploaded.name
+                st.session_state.filter_count = 0
+                st.session_state.delete_log = 0
+                st.session_state.select_all = False
+                st.session_state.uploaded_file_id = file_id
+                st.rerun()
+            except Exception as e:
+                st.error(f"파일 읽기 실패: {e}")
 
     if st.session_state.df is not None:
         user_fields = [c for c in st.session_state.df.columns if c != "_idx"]
 
+        # ── 필터 ──
         st.markdown("---")
         st.markdown("### 🔍 필터")
 
@@ -119,30 +138,33 @@ with st.sidebar:
         with col_add:
             if st.button("➕ 조건 추가", use_container_width=True):
                 st.session_state.filter_count += 1
+                st.rerun()
         with col_reset:
             if st.button("🔄 초기화", use_container_width=True):
                 st.session_state.filter_count = 0
+                st.rerun()
 
         for i in range(st.session_state.filter_count):
-            with st.container():
-                st.markdown(f"**조건 {i+1}**")
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.selectbox("필드", [""] + user_fields, key=f"ff_{i}")
-                with c2:
-                    st.selectbox("연산", [
-                        "포함", "일치", "시작", "끝남", "미포함",
-                        "비어있음", "비어있지 않음", ">", "<", "≥", "≤"
-                    ], key=f"fo_{i}")
-                op_val = st.session_state.get(f"fo_{i}", "포함")
-                if op_val not in ("비어있음", "비어있지 않음"):
-                    st.text_input("값", key=f"fv_{i}")
+            st.markdown(f"**조건 {i+1}**")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.selectbox("필드", [""] + user_fields, key=f"ff_{i}")
+            with c2:
+                st.selectbox("연산", [
+                    "포함", "일치", "시작", "끝남", "미포함",
+                    "비어있음", "비어있지 않음", ">", "<", "≥", "≤"
+                ], key=f"fo_{i}")
+            op_val = st.session_state.get(f"fo_{i}", "포함")
+            if op_val not in ("비어있음", "비어있지 않음"):
+                st.text_input("값", key=f"fv_{i}")
 
+        # ── 정렬 ──
         st.markdown("---")
         st.markdown("### 📊 정렬")
-        sort_field = st.selectbox("정렬 기준", ["없음"] + user_fields)
-        sort_dir = st.radio("방향", ["오름차순", "내림차순"], horizontal=True)
+        sort_field = st.selectbox("정렬 기준", ["없음"] + user_fields, key="sort_field")
+        sort_dir = st.radio("방향", ["오름차순", "내림차순"], horizontal=True, key="sort_dir")
 
+        # ── 일괄 수정 (필터 기준) ──
         st.markdown("---")
         st.markdown("### ✏️ 일괄 수정 (필터 기준)")
         st.caption("현재 필터 조건에 해당하는 행을 일괄 변경합니다.")
@@ -151,15 +173,12 @@ with st.sidebar:
         if st.button("✅ 일괄 적용", use_container_width=True, type="primary"):
             if bulk_field:
                 mask = pd.Series([True] * len(st.session_state.df), index=st.session_state.df.index)
-                for i in range(st.session_state.filter_count):
-                    fld = st.session_state.get(f"ff_{i}", "")
-                    op = st.session_state.get(f"fo_{i}", "포함")
-                    val = st.session_state.get(f"fv_{i}", "")
-                    if fld and fld in user_fields:
-                        mask = mask & apply_filter(st.session_state.df, {"field": fld, "op": op, "value": val})
+                for f in get_filters():
+                    if f["field"] in user_fields:
+                        mask = mask & apply_filter(st.session_state.df, f)
                 count = int(mask.sum())
                 st.session_state.df.loc[mask, bulk_field] = bulk_value
-                st.success(f"{count}건 수정 완료")
+                st.toast(f"✅ {count}건 수정 완료")
                 st.rerun()
 
 
@@ -187,7 +206,7 @@ user_fields = [c for c in master.columns if c != "_idx"]
 view = master.copy()
 
 # 전체 검색
-search = st.text_input("🔍 전체 검색", placeholder="이름, 전화번호, 이메일 등 검색...")
+search = st.text_input("🔍 전체 검색", placeholder="이름, 전화번호, 이메일 등 검색...", key="search")
 if search.strip():
     q = search.lower()
     mask = pd.Series([False] * len(view), index=view.index)
@@ -196,14 +215,13 @@ if search.strip():
     view = view[mask]
 
 # 필터 적용
-for i in range(st.session_state.filter_count):
-    fld = st.session_state.get(f"ff_{i}", "")
-    op = st.session_state.get(f"fo_{i}", "포함")
-    val = st.session_state.get(f"fv_{i}", "")
-    if fld and fld in user_fields:
-        view = view[apply_filter(view, {"field": fld, "op": op, "value": val})]
+for f in get_filters():
+    if f["field"] in user_fields:
+        view = view[apply_filter(view, f)]
 
 # 정렬
+sort_field = st.session_state.get("sort_field", "없음")
+sort_dir = st.session_state.get("sort_dir", "오름차순")
 if sort_field != "없음" and sort_field in view.columns:
     try:
         sk = pd.to_numeric(view[sort_field], errors="raise")
@@ -211,18 +229,17 @@ if sort_field != "없음" and sort_field in view.columns:
     except (ValueError, TypeError):
         view = view.sort_values(sort_field, ascending=(sort_dir == "오름차순"), key=lambda x: x.str.lower())
 
-# ── 통계 카드 ──
+# ── 통계 ──
 total = len(master)
 filtered = len(view)
 changed = 0
 if st.session_state.df_original is not None:
     try:
         orig = st.session_state.df_original
-        common = master["_idx"].isin(orig["_idx"])
-        if common.any():
-            m_sub = master[common].set_index("_idx")[user_fields]
-            o_sub = orig.set_index("_idx")[user_fields]
-            common_idx = m_sub.index.intersection(o_sub.index)
+        m_sub = master.set_index("_idx")[user_fields]
+        o_sub = orig.set_index("_idx")[user_fields]
+        common_idx = m_sub.index.intersection(o_sub.index)
+        if len(common_idx) > 0:
             changed = int((m_sub.loc[common_idx] != o_sub.loc[common_idx]).sum().sum())
     except Exception:
         pass
@@ -250,7 +267,7 @@ with sel_cols[1]:
         st.session_state.select_all = False
         st.rerun()
 
-# ── 테이블 구성 ──
+# ── 테이블 ──
 display = view[user_fields + ["_idx"]].reset_index(drop=True).copy()
 display.insert(0, "선택", st.session_state.select_all)
 
@@ -274,7 +291,7 @@ selected_idxs = edited.loc[selected_mask, "_idx"].tolist()
 
 st.markdown("")
 
-# ── 액션 버튼 ──
+# ── 액션 ──
 st.markdown("#### 🎯 선택 항목 작업")
 act_cols = st.columns([1.2, 1, 1.2, 1])
 
@@ -285,13 +302,10 @@ with act_cols[0]:
         disabled=(selected_count == 0),
         type="primary" if selected_count > 0 else "secondary",
     )
-
 with act_cols[1]:
     edit_field = st.selectbox("수정 필드", [""] + user_fields, key="sel_edit_f", label_visibility="collapsed")
-
 with act_cols[2]:
     edit_value = st.text_input("변경값", key="sel_edit_v", label_visibility="collapsed", placeholder="변경할 값")
-
 with act_cols[3]:
     edit_clicked = st.button(
         f"✏️ 수정 ({selected_count}건)",
@@ -299,7 +313,6 @@ with act_cols[3]:
         disabled=(selected_count == 0 or not edit_field),
     )
 
-# 삭제 실행
 if delete_clicked and selected_count > 0:
     st.session_state.df = st.session_state.df[~st.session_state.df["_idx"].isin(selected_idxs)].reset_index(drop=True)
     st.session_state.delete_log += selected_count
@@ -307,7 +320,6 @@ if delete_clicked and selected_count > 0:
     st.toast(f"✅ {selected_count}건 삭제 완료")
     st.rerun()
 
-# 선택 항목 수정
 if edit_clicked and selected_count > 0 and edit_field:
     mask = st.session_state.df["_idx"].isin(selected_idxs)
     st.session_state.df.loc[mask, edit_field] = edit_value
@@ -315,11 +327,11 @@ if edit_clicked and selected_count > 0 and edit_field:
     st.toast(f"✅ {selected_count}건 '{edit_field}' 수정 완료")
     st.rerun()
 
-# ── 셀 직접 편집 반영 (버튼으로) ──
+# ── 셀 직접 편집 저장 ──
 st.markdown("")
 st.markdown("#### 💾 셀 편집")
-st.caption("테이블에서 셀을 직접 수정한 뒤 아래 버튼을 눌러 반영하세요.")
-if st.button("💾 셀 편집 내용 저장", use_container_width=False):
+st.caption("테이블에서 셀을 직접 수정한 뒤 아래 버튼을 눌러 저장하세요.")
+if st.button("💾 셀 편집 내용 저장"):
     update_count = 0
     for _, row in edited.iterrows():
         idx_val = row["_idx"]
@@ -340,7 +352,6 @@ if st.button("💾 셀 편집 내용 저장", use_container_width=False):
 # ── 다운로드 ──
 st.markdown("---")
 dc1, dc2, dc3 = st.columns([1, 1, 4])
-
 export_df = st.session_state.df[user_fields]
 
 with dc1:
