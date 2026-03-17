@@ -475,8 +475,8 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                 "val": val, "prize": prize, "prize_details": prize_details})
     
     cumul_sum = sum(r['prize'] for r in results if r['category'] == 'cumulative')
-    bridge_sum = sum(r['prize'] for r in results if r['category'] == 'weekly' and '브릿지' in r['type'])
-    total = cumul_sum + bridge_sum
+    weekly_sum = sum(r['prize'] for r in results if r['category'] == 'weekly')
+    total = cumul_sum + weekly_sum
     return results, total
 
 def format_prize_clip_text(results, total):
@@ -485,17 +485,19 @@ def format_prize_clip_text(results, total):
     bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
     cumul_res = [r for r in results if r['category'] == 'cumulative']
     cumul_sum = sum(r['prize'] for r in cumul_res)
+    gugan_sum = sum(r['prize'] for r in gugan_res)
     bridge_sum = sum(r['prize'] for r in bridge_res)
     
     lines = ["", "💰 예상 시상금 현황", f"  총 시상금: {total:,.0f}원"]
-    if cumul_sum > 0 or bridge_sum > 0:
+    if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
         parts = []
         if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+        if gugan_sum > 0: parts.append(f"주차 {gugan_sum:,.0f}")
         if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
         lines.append(f"  ({' + '.join(parts)})")
     for r in gugan_res:
         if r['prize'] > 0:
-            lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (누계포함)")
+            lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
             for d in r.get('prize_details', []):
                 lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
     for r in bridge_res:
@@ -541,17 +543,19 @@ def build_prize_card_html(results, total):
     bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
     cumul_res = [r for r in results if r['category'] == 'cumulative']
     cumul_sum = sum(r['prize'] for r in cumul_res)
+    gugan_sum = sum(r['prize'] for r in gugan_res)
     bridge_sum = sum(r['prize'] for r in bridge_res)
     
     h = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
     h += f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:2px;">💰 총 시상금: {total:,.0f}원</div>'
-    if cumul_sum > 0 or bridge_sum > 0:
+    if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
         parts = []
         if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+        if gugan_sum > 0: parts.append(f"주차 {gugan_sum:,.0f}")
         if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
         h += f'<div style="font-size:11px;color:#888;margin-bottom:6px;">({" + ".join(parts)})</div>'
     if gugan_res:
-        h += '<div style="font-size:11px;color:#4e5968;font-weight:700;margin-top:4px;">📌 시책 진행 (누계에 포함)</div>'
+        h += '<div style="font-size:11px;color:#4e5968;font-weight:700;margin-top:4px;">📌 주차 시상</div>'
         for r in gugan_res:
             pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
             h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#888;font-weight:600;">{pz}</span></div>'
@@ -1037,17 +1041,19 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             p_bridge = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
             p_cumul = [r for r in p_results if r['category'] == 'cumulative']
             p_cumul_sum = sum(r['prize'] for r in p_cumul)
+            p_gugan_sum = sum(r['prize'] for r in p_gugan)
             p_bridge_sum = sum(r['prize'] for r in p_bridge)
             
             ph = f'<div style="padding:5px;">'
             ph += f'<div style="font-weight:800;color:#d9232e;font-size:18px;margin-bottom:4px;">💰 총 시상금: {p_total:,.0f}원</div>'
-            if p_cumul_sum > 0 or p_bridge_sum > 0:
+            if p_cumul_sum > 0 or p_gugan_sum > 0 or p_bridge_sum > 0:
                 parts = []
                 if p_cumul_sum > 0: parts.append(f"누계 {p_cumul_sum:,.0f}")
+                if p_gugan_sum > 0: parts.append(f"주차 {p_gugan_sum:,.0f}")
                 if p_bridge_sum > 0: parts.append(f"브릿지 {p_bridge_sum:,.0f}")
                 ph += f'<div style="color:#888;font-size:13px;margin-bottom:12px;">({" + ".join(parts)})</div>'
             if p_gugan:
-                ph += '<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 시책 진행 현황 (누계에 포함)</div>'
+                ph += '<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 주차 시상</div>'
                 for r in p_gugan:
                     pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
                     ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#888;">{r["name"]}</span><span style="color:#888;font-weight:600;">{pz}</span></div>'
