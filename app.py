@@ -338,7 +338,6 @@ def calculate_agent_performance(target_code):
             elif "주차브릿지" in p_type:
                 # ── 주차브릿지: 3주 실적 기준, 4주 동일 가동 시 예상 시상금 ──
                 w3 = safe_float(match_df[cfg['col_val_w3']].values[0]) if cfg.get('col_val_w3') and cfg['col_val_w3'] in df.columns else 0
-                w4 = safe_float(match_df[cfg['col_val_w4']].values[0]) if cfg.get('col_val_w4') and cfg['col_val_w4'] in df.columns else 0
                 w3_label = cfg.get('w3_label', '3주')
                 w4_label = cfg.get('w4_label', '4주')
                 # 구간 테이블로 예상 시상금 산출 (3주 실적 기준)
@@ -354,7 +353,7 @@ def calculate_agent_performance(target_code):
                 if w3 == 0: continue
                 calculated_results.append({
                     "name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"주차브릿지",
-                    "val_w3":w3,"val_w4":w4,
+                    "val_w3":w3,
                     "tier":tier_achieved,"prize":projected_prize,
                     "next_tier":next_tier,"next_tier_prize":next_tier_prize if next_tier else 0,
                     "shortfall":shortfall,
@@ -1118,7 +1117,7 @@ elif mode == "⚙️ 시스템 관리자":
                     "desc":"","category":"weekly","type":"구간 시책",
                     "file":file_opts[0],"col_name":"","col_code":"","col_branch":"","col_agency":"","col_manager_code":"",
                     "col_val":"","col_val_prev":"","col_val_curr":"",
-                    "col_val_w3":"","col_val_w4":"","w3_label":"3주","w4_label":"4주",
+                    "col_val_w3":"","w3_label":"3주","w4_label":"4주",
                     "weekly_bridge_tiers":[(500000,3000000),(300000,1500000),(200000,800000),(100000,200000)],
                     "prize_items":[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}],
                     "curr_req":100000.0,"tiers":[(500000,300),(300000,200),(200000,200),(100000,100)]
@@ -1196,11 +1195,10 @@ elif mode == "⚙️ 시스템 관리자":
                 cfg['col_val_curr']=st.selectbox("당월 실적",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc2_{i}")
             elif "주차브릿지" in cfg['type']:
                 # ── 주차브릿지 전용 설정 ──
-                cfg['w3_label']=st.text_input("첫째 주 라벨",value=cfg.get('w3_label','3주'),key=f"w3lbl_{i}")
-                cfg['w4_label']=st.text_input("둘째 주 라벨",value=cfg.get('w4_label','4주'),key=f"w4lbl_{i}")
+                cfg['w3_label']=st.text_input("기준 주차 라벨",value=cfg.get('w3_label','3주'),key=f"w3lbl_{i}")
+                cfg['w4_label']=st.text_input("가동 주차 라벨",value=cfg.get('w4_label','4주'),key=f"w4lbl_{i}")
                 cfg['col_val_w3']=st.selectbox(f"{cfg.get('w3_label','3주')} 실적 컬럼",cols,index=_get_idx(cfg.get('col_val_w3',''),cols),key=f"cvalw3_{i}")
-                cfg['col_val_w4']=st.selectbox(f"{cfg.get('w4_label','4주')} 실적 컬럼",cols,index=_get_idx(cfg.get('col_val_w4',''),cols),key=f"cvalw4_{i}")
-                st.caption("💡 주차브릿지: 3주 실적 기준으로 4주 동일 가동 시 예상 시상금을 보여줍니다")
+                st.caption(f"💡 {cfg.get('w3_label','3주')} 실적 기준으로 {cfg.get('w4_label','4주')} 동일 가동 시 예상 시상금을 보여줍니다")
                 st.write("📈 구간 설정 (동일 가동 기준금액, 시상금)")
                 wb_tiers = cfg.get('weekly_bridge_tiers', [(500000,3000000),(300000,1500000),(200000,800000),(100000,200000)])
                 ts = "\n".join([f"{int(t[0])},{int(t[1])}" for t in wb_tiers])
