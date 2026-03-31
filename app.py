@@ -394,14 +394,14 @@ def calculate_agent_performance(target_code):
                 for amt, rate in cfg.get('tiers', []):
                     if vc >= amt:
                         tier_achieved = amt; calc_rate = rate; break
-                # 시상금 = 구간 기준금액 × 지급률
-                prize = tier_achieved * (calc_rate / 100) if prev_met and tier_achieved > 0 else 0
+                # 시상금 = (전월말 실적 + 당월초 실적) × 지급률
+                prize = (vp + vc) * (calc_rate / 100) if prev_met and tier_achieved > 0 else 0
                 # 다음 구간 정보
                 next_tier = None; next_tier_rate = 0
                 for amt, rate in reversed(cfg.get('tiers', [])):
                     if vc < amt: next_tier = amt; next_tier_rate = rate; break
                 shortfall = max(0, (next_tier or 0) - vc) if next_tier else 0
-                next_tier_prize = next_tier * (next_tier_rate / 100) if next_tier else 0
+                next_tier_prize = (vp + next_tier) * (next_tier_rate / 100) if next_tier else 0
                 # 양쪽 다 0이면 스킵
                 if vp == 0 and vc == 0: continue
                 calculated_results.append({
@@ -1382,8 +1382,9 @@ elif mode == "⚙️ 시스템 관리자":
                 except: st.error("형식 오류: '달성금액,지급률%' 형태로 입력하세요")
                 st.markdown("**💡 시상금 계산 예시:**", unsafe_allow_html=True)
                 for amt, rate in cfg.get('tiers', []):
-                    example_prize = amt * (rate / 100)
-                    st.caption(f"  · {cfg.get('curr_label','1~5일')} {int(amt//10000)}만 달성 → {int(amt//10000)}만 × {rate:g}% = {example_prize:,.0f}원")
+                    prev_req_ex = int(float(cfg.get('prev_req', 100000)) // 10000)
+                    example_prize = (float(cfg.get('prev_req', 100000)) + amt) * (rate / 100)
+                    st.caption(f"  · {cfg.get('prev_label','30~31일')} {prev_req_ex}만 + {cfg.get('curr_label','1~5일')} {int(amt//10000)}만 = {prev_req_ex+int(amt//10000)}만 × {rate:g}% = {example_prize:,.0f}원")
             # ★ 추가 끝
             else:
                 cfg['col_val']=st.selectbox("실적 수치",cols,index=_get_idx(cfg.get('col_val',''),cols),key=f"cval_{i}")
