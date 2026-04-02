@@ -2,15 +2,15 @@ import streamlit as st
 import os
 import json
 import re
-import io
 from pathlib import Path
 from PIL import Image
 import openpyxl
 
-# ── 경로 설정 ──
+# ── 경로 설정 (스크립트 기준) ──
 BASE_DIR = Path(__file__).resolve().parent
 AGENT_XLSX = BASE_DIR / "agent.xlsx"
 MAPPING_FILE = BASE_DIR / "mapping.json"
+CONFIG_FILE = BASE_DIR / "config.json"
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 
@@ -20,10 +20,8 @@ BARE_SUFFIX = re.compile(r"\d+$")
 
 def get_base_stem(stem):
     m = SEP_SUFFIX.search(stem)
-    if m:
-        base = stem[:m.start()]
-        if base:
-            return base
+    if m and stem[:m.start()]:
+        return stem[:m.start()]
     m = BARE_SUFFIX.search(stem)
     if m and m.start() >= 2:
         return stem[:m.start()]
@@ -44,42 +42,51 @@ def load_agents(path):
     ws = wb.active
     return [str(r[0]).strip() for r in ws.iter_rows(min_row=1, values_only=True) if r[0]]
 
-@st.cache_data
-def load_agents_from_bytes(data: bytes):
-    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
-    ws = wb.active
-    return [str(r[0]).strip() for r in ws.iter_rows(min_row=1, values_only=True) if r[0]]
-
 # ── 매핑 ──
 def load_mapping():
     if MAPPING_FILE.exists():
-        with open(MAPPING_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(MAPPING_FILE.read_text(encoding="utf-8"))
     return {}
 
 def save_mapping(mapping):
-    with open(MAPPING_FILE, "w", encoding="utf-8") as f:
-        json.dump(mapping, f, ensure_ascii=False, indent=2)
+    MAPPING_FILE.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# ── 업로드 이미지 처리 ──
-def process_uploaded_images(uploaded_files):
+# ── 설정 (마지막 경로 기억) ──
+def load_config():
+    if CONFIG_FILE.exists():
+        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    return {}
+
+def save_config(cfg):
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# ── 폴더 스캔 ──
+def scan_folder(folder_path):
     files = []
-    for uf in uploaded_files:
-        if Path(uf.name).suffix.lower() not in IMG_EXTS:
-            continue
-        stem = Path(uf.name).stem
-        files.append({
-            "stem": stem,
-            "base": get_base_stem(stem),
-            "filename": uf.name,
-            "uploaded": uf,
-        })
-    return sorted(files, key=lambda x: x["filename"])
+    p = Path(folder_path)
+    if not p.is_dir():
+        return files
+    for f in sorted(p.iterdir()):
+        if f.suffix.lower() in IMG_EXTS:
+            stem = f.stem
+            files.append({
+                "stem": stem,
+                "base": get_base_stem(stem),
+                "filename": f.name,
+                "path": str(f),
+            })
+    return files
+
+def list_subfolders(root):
+    """루트 폴더 아래 하위 폴더 목록"""
+    p = Path(root)
+    if not p.is_dir():
+        return []
+    return sorted([d.name for d in p.iterdir() if d.is_dir()])
 
 def show_image(f, **kwargs):
     try:
-        f["uploaded"].seek(0)
-        st.image(f["uploaded"], **kwargs)
+        st.image(Image.open(f["path"]), **kwargs)
     except:
         st.text("(미리보기 불가)")
 
@@ -89,20 +96,13 @@ st.set_page_config(page_title="대리점 시상 매칭 관리", layout="wide")
 def main():
     st.title("📋 대리점 시상 매칭 관리")
 
-    # ══════════════════════════════════
-    #  대리점 리스트 로드
-    # ══════════════════════════════════
-    if AGENT_XLSX.exists():
-        agents = load_agents(str(AGENT_XLSX))
-    else:
-        st.warning("`agent.xlsx`가 repo에 없습니다. 업로드해주세요.")
-        uploaded_xlsx = st.file_uploader("📄 agent.xlsx 업로드", type=["xlsx"])
-        if uploaded_xlsx:
-            agents = load_agents_from_bytes(uploaded_xlsx.read())
-        else:
-            st.stop()
-
+    # ── 대리점 리스트 ──
+    if not AGENT_XLSX.exists():
+        st.error(f"`agent.xlsx`를 찾을 수 없습니다.\n\n이 파일과 같은 폴더에 넣어주세요: `{BASE_DIR}`")
+        st.stop()
+    agents = load_agents(str(AGENT_XLSX))
     mapping = load_mapping()
+    cfg = load_config()
 
     # ── 사이드바 ──
     with st.sidebar:
@@ -123,35 +123,55 @@ def main():
                 st.text(f"{i}. {a}")
 
     # ══════════════════════════════════
-    #  시상 이미지 업로드
+    #  시상 루트 폴더 설정
     # ══════════════════════════════════
-    st.subheader("📁 시상 이미지 업로드")
-    st.caption(
-        "로컬 PC의 주차별 시상 폴더에서 이미지를 선택해주세요. "
-        "(Ctrl+A로 폴더 내 전체 선택 가능)"
+    st.subheader("📁 시상 폴더 지정")
+
+    last_root = cfg.get("img_root", "")
+    img_root = st.text_input(
+        "시상 이미지 루트 폴더",
+        value=last_root,
+        placeholder=r"예: C:\시상  또는  D:\메리츠\시상",
+        help="주차별 하위폴더(2604_1, 2604_2…)가 들어있는 상위 폴더",
     )
 
-    uploaded = st.file_uploader(
-        "시상 이미지 선택",
-        type=["png", "jpg", "jpeg", "gif", "bmp", "webp"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-    )
+    if img_root and img_root != last_root:
+        cfg["img_root"] = img_root
+        save_config(cfg)
 
-    if not uploaded:
-        st.info("로컬 시상 폴더에서 이미지 파일들을 선택해주세요.")
+    if not img_root:
+        st.info("시상 이미지가 저장된 루트 폴더 경로를 입력해주세요.")
         st.stop()
 
-    files = process_uploaded_images(uploaded)
+    if not Path(img_root).is_dir():
+        st.error(f"❌ 폴더를 찾을 수 없습니다: `{img_root}`")
+        st.stop()
+
+    # ── 주차 선택 ──
+    subfolders = list_subfolders(img_root)
+    if not subfolders:
+        st.warning(f"하위 폴더가 없습니다: `{img_root}`\n\n이 폴더 안에 `2604_1`, `2604_2` 같은 주차별 폴더를 만들어주세요.")
+        st.stop()
+
+    selected_week = st.selectbox(
+        "📅 주차 선택",
+        options=subfolders,
+        index=len(subfolders) - 1,  # 가장 최근 폴더 기본 선택
+    )
+
+    target_folder = Path(img_root) / selected_week
+
+    # ══════════════════════════════════
+    #  폴더 스캔
+    # ══════════════════════════════════
+    files = scan_folder(target_folder)
     if not files:
-        st.warning("업로드된 파일 중 이미지가 없습니다.")
+        st.warning(f"이미지 파일이 없습니다: `{target_folder}`")
         st.stop()
 
-    st.success(f"✅ {len(files)}개 이미지 업로드됨")
+    st.success(f"✅ `{selected_week}/` — {len(files)}개 이미지")
 
-    # ══════════════════════════════════
-    #  매칭 분류
-    # ══════════════════════════════════
+    # ── 매칭 분류 ──
     matched, unmatched = [], []
     for f in files:
         agent, matched_key = find_match(f["stem"], mapping)
