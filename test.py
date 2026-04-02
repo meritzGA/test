@@ -7,11 +7,10 @@ from pathlib import Path
 from PIL import Image
 import openpyxl
 
-# ── 경로 설정 (스크립트 기준 상대경로) ──
+# ── 경로 설정 ──
 BASE_DIR = Path(__file__).resolve().parent
 AGENT_XLSX = BASE_DIR / "agent.xlsx"
 MAPPING_FILE = BASE_DIR / "mapping.json"
-IMG_ROOT = BASE_DIR / "시상"
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 
@@ -62,32 +61,25 @@ def save_mapping(mapping):
     with open(MAPPING_FILE, "w", encoding="utf-8") as f:
         json.dump(mapping, f, ensure_ascii=False, indent=2)
 
-# ── 폴더 탐색 ──
-def list_week_folders():
-    """시상/ 아래 하위 폴더 목록"""
-    if not IMG_ROOT.is_dir():
-        return []
-    return sorted([d.name for d in IMG_ROOT.iterdir() if d.is_dir()])
-
-def scan_folder(folder_path):
+# ── 업로드 이미지 처리 ──
+def process_uploaded_images(uploaded_files):
     files = []
-    p = Path(folder_path)
-    if not p.is_dir():
-        return files
-    for f in sorted(p.iterdir()):
-        if f.suffix.lower() in IMG_EXTS:
-            stem = f.stem
-            files.append({
-                "stem": stem,
-                "base": get_base_stem(stem),
-                "filename": f.name,
-                "path": str(f),
-            })
-    return files
+    for uf in uploaded_files:
+        if Path(uf.name).suffix.lower() not in IMG_EXTS:
+            continue
+        stem = Path(uf.name).stem
+        files.append({
+            "stem": stem,
+            "base": get_base_stem(stem),
+            "filename": uf.name,
+            "uploaded": uf,
+        })
+    return sorted(files, key=lambda x: x["filename"])
 
 def show_image(f, **kwargs):
     try:
-        st.image(Image.open(f["path"]), **kwargs)
+        f["uploaded"].seek(0)
+        st.image(f["uploaded"], **kwargs)
     except:
         st.text("(미리보기 불가)")
 
@@ -97,16 +89,19 @@ st.set_page_config(page_title="대리점 시상 매칭 관리", layout="wide")
 def main():
     st.title("📋 대리점 시상 매칭 관리")
 
-    # ── 대리점 리스트 ──
+    # ══════════════════════════════════
+    #  대리점 리스트 로드
+    # ══════════════════════════════════
     if AGENT_XLSX.exists():
         agents = load_agents(str(AGENT_XLSX))
     else:
-        st.warning("`agent.xlsx`가 repo에 없습니다. 직접 업로드해주세요.")
-        uploaded_xlsx = st.file_uploader("agent.xlsx 업로드", type=["xlsx"])
+        st.warning("`agent.xlsx`가 repo에 없습니다. 업로드해주세요.")
+        uploaded_xlsx = st.file_uploader("📄 agent.xlsx 업로드", type=["xlsx"])
         if uploaded_xlsx:
             agents = load_agents_from_bytes(uploaded_xlsx.read())
         else:
             st.stop()
+
     mapping = load_mapping()
 
     # ── 사이드바 ──
@@ -127,66 +122,36 @@ def main():
             for i, a in enumerate(agents, 1):
                 st.text(f"{i}. {a}")
 
-    # ════════════════════════════════════
-    #  폴더 선택
-    # ════════════════════════════════════
-    week_folders = list_week_folders()
+    # ══════════════════════════════════
+    #  시상 이미지 업로드
+    # ══════════════════════════════════
+    st.subheader("📁 시상 이미지 업로드")
+    st.caption(
+        "로컬 PC의 주차별 시상 폴더에서 이미지를 선택해주세요. "
+        "(Ctrl+A로 폴더 내 전체 선택 가능)"
+    )
 
-    if week_folders:
-        st.subheader("📁 주차 폴더 선택")
-        selected_week = st.selectbox(
-            "시상 폴더",
-            options=week_folders,
-            format_func=lambda x: f"시상/{x}/",
-            help=f"repo 내 `시상/` 폴더 아래의 주차별 하위폴더입니다. (경로: {IMG_ROOT})",
-        )
-        target_folder = IMG_ROOT / selected_week
-    else:
-        st.subheader("📁 폴더 경로 지정")
-        st.info(
-            "repo에 `시상/` 폴더가 없습니다.\n\n"
-            "아래에 직접 경로를 입력하거나, repo에 다음 구조를 만들어주세요:\n"
-            "```\n시상/\n  2604_1/\n    a1.png\n    aba.jpg\n  2604_2/\n    ...\n```"
-        )
-        selected_week = None
-        target_folder = None
+    uploaded = st.file_uploader(
+        "시상 이미지 선택",
+        type=["png", "jpg", "jpeg", "gif", "bmp", "webp"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+    )
 
-    # 직접 경로 입력 (항상 표시)
-    with st.expander("📂 경로 직접 입력", expanded=not week_folders):
-        custom_path = st.text_input(
-            "폴더 절대 경로 또는 상대 경로",
-            placeholder="예: 시상/2604_1  또는  /mount/src/test/시상/2604_1",
-        )
-        if custom_path:
-            p = Path(custom_path)
-            if not p.is_absolute():
-                p = BASE_DIR / p
-            if p.is_dir():
-                target_folder = p
-                st.success(f"✅ 폴더 확인됨: `{p}`")
-            else:
-                st.error(f"❌ 폴더를 찾을 수 없습니다: `{p}`")
-                # 해당 상위 폴더 내용 보여주기
-                parent = p.parent
-                if parent.is_dir():
-                    contents = sorted([x.name for x in parent.iterdir()])
-                    st.caption(f"`{parent}` 안의 항목: {', '.join(contents[:20])}")
-                target_folder = None
-
-    if not target_folder:
+    if not uploaded:
+        st.info("로컬 시상 폴더에서 이미지 파일들을 선택해주세요.")
         st.stop()
 
-    # ════════════════════════════════════
-    #  폴더 스캔
-    # ════════════════════════════════════
-    files = scan_folder(target_folder)
+    files = process_uploaded_images(uploaded)
     if not files:
-        st.warning(f"해당 폴더에 이미지 파일이 없습니다: `{target_folder}`")
+        st.warning("업로드된 파일 중 이미지가 없습니다.")
         st.stop()
 
-    st.success(f"✅ `{target_folder.name}/` 에서 {len(files)}개 이미지 발견")
+    st.success(f"✅ {len(files)}개 이미지 업로드됨")
 
-    # ── 매칭 분류 ──
+    # ══════════════════════════════════
+    #  매칭 분류
+    # ══════════════════════════════════
     matched, unmatched = [], []
     for f in files:
         agent, matched_key = find_match(f["stem"], mapping)
@@ -201,7 +166,9 @@ def main():
         else:
             unmatched.append(f)
 
-    # ── 탭 ──
+    # ══════════════════════════════════
+    #  탭
+    # ══════════════════════════════════
     tab1, tab2, tab3 = st.tabs([
         f"🔗 매칭 완료 ({len(matched)})",
         f"❓ 미매칭 ({len(unmatched)})",
