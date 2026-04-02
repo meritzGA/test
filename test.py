@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import json
 import re
+import io
 from pathlib import Path
 from PIL import Image
 import openpyxl
@@ -41,6 +42,12 @@ def find_match(stem, mapping):
 @st.cache_data
 def load_agents(path):
     wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb.active
+    return [str(r[0]).strip() for r in ws.iter_rows(min_row=1, values_only=True) if r[0]]
+
+@st.cache_data
+def load_agents_from_bytes(data: bytes):
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     ws = wb.active
     return [str(r[0]).strip() for r in ws.iter_rows(min_row=1, values_only=True) if r[0]]
 
@@ -91,10 +98,15 @@ def main():
     st.title("📋 대리점 시상 매칭 관리")
 
     # ── 대리점 리스트 ──
-    if not AGENT_XLSX.exists():
-        st.error(f"`agent.xlsx`가 없습니다. 스크립트와 같은 폴더에 넣어주세요.\n\n경로: `{AGENT_XLSX}`")
-        st.stop()
-    agents = load_agents(str(AGENT_XLSX))
+    if AGENT_XLSX.exists():
+        agents = load_agents(str(AGENT_XLSX))
+    else:
+        st.warning("`agent.xlsx`가 repo에 없습니다. 직접 업로드해주세요.")
+        uploaded_xlsx = st.file_uploader("agent.xlsx 업로드", type=["xlsx"])
+        if uploaded_xlsx:
+            agents = load_agents_from_bytes(uploaded_xlsx.read())
+        else:
+            st.stop()
     mapping = load_mapping()
 
     # ── 사이드바 ──
