@@ -395,6 +395,16 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
         if _cc not in df_src.columns:
             df_src[_cc] = df_src[col_code].apply(clean_key)
         match_df = df_src[df_src[_cc] == safe_code]
+        # ★ FIX: col_code 매칭 실패 시 본인고객번호 등 범용 키로 폴백
+        if match_df.empty:
+            for alt_col in ['본인고객번호', '본인고객ID', '_unified_search_key']:
+                if alt_col in df_src.columns:
+                    _ac = f"_pclean_{alt_col}"
+                    if _ac not in df_src.columns:
+                        df_src[_ac] = df_src[alt_col].apply(clean_key)
+                    match_df = df_src[df_src[_ac] == safe_code]
+                    if not match_df.empty:
+                        break
         if match_df.empty:
             continue
         
@@ -1207,22 +1217,12 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
-    # ★ FIX: base64 데이터를 script 밖으로 분리 (대용량 데이터 시 JS 파서 실패 방지)
-    html += f'<script type="application/json" id="clipB64">{clip_b64}</script>'
-    html += f'<script type="application/json" id="prizeB64">{prize_b64}</script>'
-
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
-    var clipData, prizeHtml;
-    try {{
-        clipData = JSON.parse(decodeURIComponent(escape(atob(document.getElementById('clipB64').textContent))));
-        prizeHtml = JSON.parse(decodeURIComponent(escape(atob(document.getElementById('prizeB64').textContent))));
-    }} catch(e) {{
-        clipData = []; prizeHtml = [];
-        console.error('Data parse error:', e);
-    }}
+    var clipData = [];
+    var prizeHtml = [];
     
     function isMobile() {{ return window.innerWidth <= 768; }}
     
@@ -1381,6 +1381,18 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         }});
         setTimeout(autoResize, 50);
     }}
+    function safeB64Decode(b64) {{
+        try {{
+            var bin = atob(b64);
+            var bytes = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new TextDecoder('utf-8').decode(bytes);
+        }} catch(e) {{
+            return decodeURIComponent(escape(atob(b64)));
+        }}
+    }}
+    try {{ clipData = JSON.parse(safeB64Decode("{clip_b64}")); }} catch(e) {{ console.error("clip err:", e); }}
+    try {{ prizeHtml = JSON.parse(safeB64Decode("{prize_b64}")); }} catch(e) {{ console.error("prize err:", e); }}
     </script>
     """
     return html
@@ -2460,6 +2472,17 @@ elif menu == "매니저 화면 (로그인)":
                                                     break
                                     if agent_code:
                                         results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
+                                        # ★ FIX: col_code 불일치 시 본인고객번호로 재시도
+                                        if not results:
+                                            for alt in ['본인고객번호', '본인고객ID']:
+                                                if alt in my_df.columns:
+                                                    alt_raw = my_df.loc[orig_idx, alt]
+                                                    if not pd.isna(alt_raw):
+                                                        alt_code = clean_key(str(alt_raw))
+                                                        if alt_code and alt_code != agent_code:
+                                                            results, total = calculate_prize_for_code(alt_code, prize_config, df_full)
+                                                            if results:
+                                                                break
                                         if results:
                                             prize_data_map[row_idx] = (results, total)
                 except Exception as prize_err:
