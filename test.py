@@ -1207,12 +1207,22 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
+    # ★ FIX: base64 데이터를 script 밖으로 분리 (대용량 데이터 시 JS 파서 실패 방지)
+    html += f'<script type="application/json" id="clipB64">{clip_b64}</script>'
+    html += f'<script type="application/json" id="prizeB64">{prize_b64}</script>'
+
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
-    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
-    var prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}"))));
+    var clipData, prizeHtml;
+    try {{
+        clipData = JSON.parse(decodeURIComponent(escape(atob(document.getElementById('clipB64').textContent))));
+        prizeHtml = JSON.parse(decodeURIComponent(escape(atob(document.getElementById('prizeB64').textContent))));
+    }} catch(e) {{
+        clipData = []; prizeHtml = [];
+        console.error('Data parse error:', e);
+    }}
     
     function isMobile() {{ return window.innerWidth <= 768; }}
     
