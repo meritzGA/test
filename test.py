@@ -1217,6 +1217,10 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
+    # ★ FIX: base64 데이터를 script 밖 별도 요소로 분리 (대용량 시 JS 파서 오류 방지)
+    html += f'<script type="application/json" id="__clipB64">{clip_b64}</script>\n'
+    html += f'<script type="application/json" id="__prizeB64">{prize_b64}</script>\n'
+
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
@@ -1391,8 +1395,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             return decodeURIComponent(escape(atob(b64)));
         }}
     }}
-    try {{ clipData = JSON.parse(safeB64Decode("{clip_b64}")); }} catch(e) {{ console.error("clip err:", e); }}
-    try {{ prizeHtml = JSON.parse(safeB64Decode("{prize_b64}")); }} catch(e) {{ console.error("prize err:", e); }}
+    try {{ clipData = JSON.parse(safeB64Decode(document.getElementById('__clipB64').textContent)); }} catch(e) {{ console.error("clip err:", e); }}
+    try {{ prizeHtml = JSON.parse(safeB64Decode(document.getElementById('__prizeB64').textContent)); }} catch(e) {{ console.error("prize err:", e); }}
     </script>
     """
     return html
