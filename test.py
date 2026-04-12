@@ -1217,9 +1217,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
-    # ★ FIX: base64 데이터를 script 밖 별도 요소로 분리 (대용량 시 JS 파서 오류 방지)
-    html += f'<script type="application/json" id="__clipB64">{clip_b64}</script>\n'
-    html += f'<script type="application/json" id="__prizeB64">{prize_b64}</script>\n'
+    # ★ FIX: 데이터를 hidden div에 저장 (script 태그 사용 시 </script> 충돌 방지)
+    html += f'<div id="__clipB64" style="display:none">{clip_b64}</div>\n'
+    html += f'<div id="__prizeB64" style="display:none">{prize_b64}</div>\n'
 
     html += f"""
     <script>
@@ -1227,104 +1227,115 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     var FC = FC_DESKTOP;
     var clipData = [];
     var prizeHtml = [];
+    var _jsOk = false;
     
     function isMobile() {{ return window.innerWidth <= 768; }}
-    
+
+    /* ── 데이터 로딩 (DOM에서 base64 읽기) ── */
+    function _loadData() {{
+        try {{
+            var ce = document.getElementById('__clipB64');
+            var pe = document.getElementById('__prizeB64');
+            if (!ce || !pe) {{ console.error('Data elements not found'); return; }}
+            clipData = JSON.parse(_b64dec(ce.textContent.trim()));
+            prizeHtml = JSON.parse(_b64dec(pe.textContent.trim()));
+            _jsOk = true;
+        }} catch(e) {{
+            console.error('Data load error:', e);
+            _jsOk = false;
+        }}
+    }}
+    function _b64dec(b64) {{
+        try {{
+            var bin = atob(b64);
+            var bytes = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new TextDecoder('utf-8').decode(bytes);
+        }} catch(e) {{
+            return decodeURIComponent(escape(atob(b64)));
+        }}
+    }}
+
+    /* ── 복사 (데스크탑: 항상 오버레이 / 모바일: share → 오버레이) ── */
     function copyClip(idx, btn, evt) {{
         evt.stopPropagation();
+        if (!_jsOk) {{ alert('데이터를 불러오지 못했습니다. 새로고침 해주세요.'); return; }}
         var text = clipData[idx];
-        if (!text) return;
+        if (!text) {{ alert('복사할 내용이 없습니다.'); return; }}
         if (isMobile() && navigator.share) {{
             navigator.share({{ text: text }}).then(function() {{
-                showCopied(btn);
+                _showBtn(btn, true);
             }}).catch(function() {{
-                fallbackCopy(text, btn);
+                _showOverlay(text);
             }});
             return;
         }}
-        fallbackCopy(text, btn);
+        _showOverlay(text);
     }}
-    function fallbackCopy(text, btn) {{
-        if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(text).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{
-                execCopyFallback(text, btn);
-            }});
-            return;
-        }}
-        execCopyFallback(text, btn);
-    }}
-    function execCopyFallback(text, btn) {{
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('readonly', '');
-        ta.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;z-index:-1;';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        ta.setSelectionRange(0, ta.value.length);
-        var ok = false;
-        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(ta);
-        if (ok) {{ showCopied(btn); return; }}
-        showOverlay(text);
-    }}
-    function showOverlay(text) {{
+    function _showOverlay(text) {{
         var ov = document.getElementById('clip-overlay');
         var ta = document.getElementById('clip-ta');
         ta.value = text;
         ov.style.display = 'flex';
-        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
+        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); }}, 100);
     }}
     function doCopyOverlay() {{
         var ta = document.getElementById('clip-ta');
         var text = ta.value;
-        var tmp = document.createElement('textarea');
-        tmp.value = text;
-        tmp.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;z-index:-1;';
-        tmp.setAttribute('readonly', '');
-        document.body.appendChild(tmp);
-        tmp.focus();
-        tmp.select();
-        tmp.setSelectionRange(0, 999999);
+        var ok = false;
+        /* 1차: Clipboard API */
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                _overlayDone(true);
+            }}).catch(function() {{
+                _tryCmdCopy(ta, text);
+            }});
+            return;
+        }}
+        _tryCmdCopy(ta, text);
+    }}
+    function _tryCmdCopy(ta, text) {{
+        /* 2차: execCommand */
+        ta.readOnly = false;
+        ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
         var ok = false;
         try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(tmp);
-        if (!ok) {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
-            ta.readOnly = true;
-        }}
+        if (ok) {{ _overlayDone(true); }}
+        else {{ _overlayDone(false); ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); }}
+    }}
+    function _overlayDone(ok) {{
         var btn = document.getElementById('clip-copy-btn');
-        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
-        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
         if (ok) {{
+            btn.textContent = '✅ 복사 완료!';
+            btn.style.background = '#22C55E'; btn.style.color = '#fff';
             setTimeout(function() {{
                 document.getElementById('clip-overlay').style.display = 'none';
                 btn.textContent = '📋 복사하기';
                 btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
             }}, 1200);
         }} else {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+            btn.textContent = '⚠️ Ctrl+C로 직접 복사하세요';
+            btn.style.background = '#f59e0b'; btn.style.color = '#fff';
         }}
     }}
-    function showCopied(btn) {{
+    function _showBtn(btn, ok) {{
         var orig = btn.innerHTML;
         btn.classList.add('copied');
         btn.innerHTML = '✅ 복사 완료!';
         setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
     }}
+
+    /* ── 시상금 조회 ── */
     function showPrize(idx, evt) {{
         if (evt) evt.stopPropagation();
+        if (!_jsOk) {{ alert('데이터를 불러오지 못했습니다. 새로고침 해주세요.'); return; }}
         var h = prizeHtml[idx];
         if (!h) {{ alert('시상금 데이터가 없습니다.'); return; }}
         document.getElementById('prize-content').innerHTML = h;
         document.getElementById('prize-overlay').style.display = 'flex';
     }}
-    
+
+    /* ── 열 고정(freeze) ── */
     function applyFreeze() {{
         var t = document.getElementById("{table_id}");
         FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
@@ -1356,8 +1367,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
         }}
     }}
-    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
+
+    /* ── 정렬 ── */
     var ss = {{}};
     function sortTable(th) {{
         var t = document.getElementById("{table_id}");
@@ -1367,7 +1378,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         if (isNaN(ci)) return;
         var asc = ss[ci] !== true; ss = {{}}; ss[ci] = asc;
         rows.sort(function(a, b) {{
-            var aT = a.cells[ci].textContent.trim(), bT = b.cells[ci].textContent.trim();
+            var aT = (a.cells[ci] ? a.cells[ci].textContent : '').trim();
+            var bT = (b.cells[ci] ? b.cells[ci].textContent : '').trim();
             var aN = parseFloat(aT.replace(/,/g,"")), bN = parseFloat(bT.replace(/,/g,""));
             if (aT === "" && bT === "") return 0;
             if (aT === "") return 1; if (bT === "") return -1;
@@ -1385,18 +1397,14 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         }});
         setTimeout(autoResize, 50);
     }}
-    function safeB64Decode(b64) {{
-        try {{
-            var bin = atob(b64);
-            var bytes = new Uint8Array(bin.length);
-            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            return new TextDecoder('utf-8').decode(bytes);
-        }} catch(e) {{
-            return decodeURIComponent(escape(atob(b64)));
-        }}
-    }}
-    try {{ clipData = JSON.parse(safeB64Decode(document.getElementById('__clipB64').textContent)); }} catch(e) {{ console.error("clip err:", e); }}
-    try {{ prizeHtml = JSON.parse(safeB64Decode(document.getElementById('__prizeB64').textContent)); }} catch(e) {{ console.error("prize err:", e); }}
+
+    /* ── 초기화 ── */
+    window.addEventListener('load', function() {{
+        _loadData();
+        applyFreeze();
+        autoResize();
+    }});
+    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
     </script>
     """
     return html
