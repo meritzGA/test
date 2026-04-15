@@ -227,14 +227,16 @@ def calculate_agent_performance(target_code, df, ps):
     for w, info in ps['weeks'].items():
         perf = safe_float(row.get(info['perf'], 0)) if info['perf'] else 0
         details = []
+        has_eligible = False
         for it in info['items']:
             elig = safe_float(row.get(it['elig'], 0))
             if elig == 0: continue
+            has_eligible = True
             amt = safe_float(row.get(it['prize'], 0))
             if amt > 0:
                 details.append({'label': it['label'], 'amount': amt})
         prize = sum(d['amount'] for d in details)
-        if details or perf > 0:
+        if details or perf > 0 or has_eligible:
             results.append({
                 'name': f'{w}주차 시상', 'desc': '', 'category': 'weekly',
                 'type': '구간', 'val': perf, 'prize': prize,
