@@ -291,15 +291,26 @@ def copy_btn_component(text):
     <script>
     document.getElementById("copy-btn").onclick = function() {{
         const text = {escaped};
-        if (navigator.share) {{
+        var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+        if (isMobile && navigator.share) {{
             navigator.share({{ text: text }}).catch(function() {{
                 navigator.clipboard.writeText(text).then(function() {{
-                    alert("복사 완료! 채팅창에 붙여넣기 하세요.");
+                    alert("복사 완료! 카카오톡 채팅창에 붙여넣기 하세요.");
                 }});
             }});
         }} else {{
             navigator.clipboard.writeText(text).then(function() {{
-                alert("복사 완료! 채팅창에 Ctrl+V로 붙여넣기 하세요.");
+                var btn = document.getElementById("copy-btn");
+                btn.textContent = "✅ 복사 완료! 채팅창에 붙여넣기(Ctrl+V) 하세요";
+                btn.style.backgroundColor = "#22C55E";
+                btn.style.color = "#fff";
+                setTimeout(function() {{
+                    btn.textContent = "💬 카카오톡 메시지 원클릭 복사";
+                    btn.style.backgroundColor = "#FEE500";
+                    btn.style.color = "#3C1E1E";
+                }}, 2500);
+            }}).catch(function() {{
+                alert("복사에 실패했습니다. 직접 선택하여 복사해주세요.");
             }});
         }}
     }}
