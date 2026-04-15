@@ -106,7 +106,7 @@ def find_latest_files():
     return sp, bp, dd
 
 @st.cache_data(show_spinner="데이터를 로딩하고 있습니다...")
-def load_and_merge(_sp, _bp):
+def load_and_merge(sum_path, bridge_path, cache_ver=None):
     def _read(path):
         df = pd.read_excel(path)
         df.columns = [_clean_excel_text(str(c)) if isinstance(c, str) else c for c in df.columns]
@@ -114,11 +114,11 @@ def load_and_merge(_sp, _bp):
             if df[col].dtype == 'object' or pd.api.types.is_string_dtype(df[col]):
                 df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
         return df
-    df_sum = _read(_sp)
+    df_sum = _read(sum_path)
     mc = '대리점설계사조직코드'
     df_sum['_key'] = df_sum[mc].apply(safe_str)
-    if _bp and os.path.exists(_bp):
-        df_br = _read(_bp)
+    if bridge_path and os.path.exists(bridge_path):
+        df_br = _read(bridge_path)
         df_br['_key'] = df_br[mc].apply(safe_str)
         br_only = [c for c in df_br.columns if c not in df_sum.columns or c == '_key']
         df = pd.merge(df_sum, df_br[br_only], on='_key', how='left')
@@ -131,9 +131,9 @@ def load_and_merge(_sp, _bp):
 # 3. 시상 구조 자동 감지
 # ═══════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
-def detect_prize_structure(_cols_tuple, _labels_json):
-    cols = set(_cols_tuple)
-    labels = json.loads(_labels_json)
+def detect_prize_structure(cols_tuple, labels_json):
+    cols = set(cols_tuple)
+    labels = json.loads(labels_json)
     wp = re.compile(r'^추가13회예정금_(\d+)주대상$')
     sp = re.compile(r'^추가13회예정금_(\d+)주대상_(.+)$')
     mp = re.compile(r'^추가13회예정금_(\d+)_(\d+)주대상$')  # 연속주차 (예: 1_2주)
@@ -488,7 +488,9 @@ if not sp:
     """)
     st.stop()
 
-df_merged = load_and_merge(sp, bp)
+sp_mtime = os.path.getmtime(sp) if sp else 0
+bp_mtime = os.path.getmtime(bp) if bp and os.path.exists(bp) else 0
+df_merged = load_and_merge(sp, bp, cache_ver=f"{sp_mtime}_{bp_mtime}")
 ps = detect_prize_structure(
     tuple(df_merged.columns.tolist()),
     json.dumps(settings.get('prize_labels', DEFAULT_SETTINGS['prize_labels']), ensure_ascii=False)
@@ -730,6 +732,10 @@ elif mode == "⚙️ 시스템 관리자":
         if pw: st.error("비밀번호가 일치하지 않습니다.")
         st.stop()
     st.success("✅ 인증 성공")
+
+    if st.button("🔄 데이터 캐시 초기화 (파일 교체 후 사용)", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
 
     st.header("📁 로드된 데이터")
     st.markdown(f"- **SUM 파일**: `{os.path.basename(sp)}`")
