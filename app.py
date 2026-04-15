@@ -352,7 +352,7 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
                     for d in details:
                         pdh += f"<div class='data-row'><span class='data-label'>{d['label']}</span><span class='data-value' style='color:rgb(128,0,0);'>{d['amount']:,.0f}원</span></div>"
                     pdh += "<div class='toss-divider'></div>"
-                ch = f"<div class='toss-card'><div class='toss-title'>{r['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>현재 누적 실적</span><span class='data-value'>{r['val']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{r['prize']:,.0f}원</span></div></div>"
+                ch = f"<div class='toss-card'><div class='toss-title'>{r['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>주차 누계 실적</span><span class='data-value'>{r['val']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{r['prize']:,.0f}원</span></div></div>"
                 share += f"\n[{r['name']}]\n- 실적: {r['val']:,.0f}원\n- 시상금: {r['prize']:,.0f}원\n"
                 for d in details: share += f"  · {d['label']}: {d['amount']:,.0f}원\n"
 
