@@ -99,8 +99,10 @@ def find_latest_files():
     if sp:
         m = re.search(r'(\d{8})', os.path.basename(sp))
         if m:
-            d = m.group(1)
-            dd = f"{d[:4]}.{d[4:6]}.{d[6:8]}"
+            from datetime import timedelta
+            file_date = datetime.strptime(m.group(1), '%Y%m%d')
+            base_date = file_date - timedelta(days=1)
+            dd = base_date.strftime('%Y.%m.%d')
     return sp, bp, dd
 
 @st.cache_data(show_spinner="데이터를 로딩하고 있습니다...")
@@ -273,28 +275,6 @@ def calculate_agent_performance(target_code, df, ps):
                 'label_prev': b['lp'], 'label_curr': b['lc'],
             })
 
-    # ── 누계 (cumulative) ──
-    base_prize = safe_float(row.get('시상금계', 0))
-    if base_prize > 0:
-        results.append({
-            'name': '기본 시상', 'desc': '', 'category': 'cumulative',
-            'type': '누계', 'val': safe_float(row.get('실적계', 0)),
-            'prize': base_prize,
-            'prize_details': [{'label': '기본 시상 (실적×지급률)', 'amount': base_prize}]
-        })
-
-    if ps['cumul']:
-        elig = safe_float(row.get(ps['cumul']['elig'], 0))
-        if elig != 0:
-            amt = safe_float(row.get(ps['cumul']['prize'], 0))
-            if amt > 0:
-                results.append({
-                    'name': '추가 누계 시상', 'desc': '', 'category': 'cumulative',
-                    'type': '누계', 'val': safe_float(row.get('실적계', 0)),
-                    'prize': amt,
-                    'prize_details': [{'label': '추가 13회 예정금 누계', 'amount': amt}]
-                })
-
     total = sum(r['prize'] for r in results)
     return results, total
 
@@ -339,20 +319,16 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
     if not results: return
 
     date_html = f"<div class='date-badge'>📅 기준일: {data_date}</div>" if data_date else ""
-    weekly = [r for r in results if r['category'] == 'weekly']
-    cumul = [r for r in results if r['category'] == 'cumulative']
-    w_total = sum(r['prize'] for r in weekly)
-    c_total = sum(r['prize'] for r in cumul)
 
     share = f"🎯 [{user_name} 팀장님 실적 현황]\n"
     if data_date: share += f"📅 기준일: {data_date}\n"
-    share += f"💰 총 합산 시상금: {total_prize:,.0f}원\n────────────────\n"
+    share += f"💰 시책 합산 시상금: {total_prize:,.0f}원\n────────────────\n"
 
-    # ── 주차/브릿지 요약 카드 (빨간색) ──
-    if weekly:
-        sh = f"<div class='summary-card'><div class='summary-label'>{user_name} 팀장님의 시책 현황</div>{date_html}<div class='summary-total'>{w_total:,.0f}원</div><div class='summary-divider'></div>"
+    # ── 시책 요약 카드 ──
+    if results:
+        sh = f"<div class='summary-card'><div class='summary-label'>{user_name} 팀장님의 시책 현황</div>{date_html}<div class='summary-total'>{total_prize:,.0f}원</div><div class='summary-divider'></div>"
         share += "📌 [진행 중인 시책]\n"
-        for r in weekly:
+        for r in results:
             if r['type'] == '구간':
                 sh += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{r['name']}</span><span class='summary-item-val'>{r['prize']:,.0f}원</span></div>"
                 share += f"🔹 {r['name']}: {r['prize']:,.0f}원\n"
@@ -364,7 +340,7 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
         st.markdown(sh, unsafe_allow_html=True)
 
         # ── 상세 카드 ──
-        for r in weekly:
+        for r in results:
             desc_html = r['desc'].replace('\n', '<br>') if r.get('desc') else ''
             details = r.get('prize_details', [])
 
@@ -403,27 +379,6 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
                 continue
 
             st.markdown(ch, unsafe_allow_html=True)
-
-    # ── 누계 요약 카드 (파란색) ──
-    if cumul:
-        d_in_c = date_html if not weekly else ""
-        ch = f"<div class='cumulative-card'><div class='summary-label'>{user_name} 팀장님의 월간 누계 시상</div>{d_in_c}<div class='summary-total'>{c_total:,.0f}원</div><div class='summary-divider'></div>"
-        share += f"\n🏆 [월간 누계 시상]\n"
-        for r in cumul:
-            ch += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{r['name']}</span><span class='summary-item-val'>{r['prize']:,.0f}원</span></div>"
-            share += f"🔹 {r['name']}: {r['prize']:,.0f}원\n"
-        ch += "</div>"
-        st.markdown(ch, unsafe_allow_html=True)
-        sh2 = ""
-        for r in cumul:
-            dl = ""
-            details = r.get('prize_details', [])
-            if len(details) > 1:
-                for d in details: dl += f"<span class='cumul-stack-val'>{d['label']}: {d['amount']:,.0f}원</span>"
-            else:
-                dl = f"<span class='cumul-stack-val'>누계실적: {r['val']:,.0f}원</span>"
-            sh2 += f"<div class='cumul-stack-box'><div class='cumul-stack-info'><span class='cumul-stack-title'>{r['name']}</span>{dl}</div><div class='cumul-stack-prize'>{r['prize']:,.0f}원</div></div>"
-        st.markdown(sh2, unsafe_allow_html=True)
 
     if show_share:
         st.markdown("<h4 class='main-title' style='margin-top:10px;'>💬 카카오톡 바로 공유하기</h4>", unsafe_allow_html=True)
@@ -776,10 +731,6 @@ elif mode == "⚙️ 시스템 관리자":
             if info['perf']: st.markdown(f"**실적**: `{info['perf']}`")
             for p in info['items']:
                 st.markdown(f"- **{p['label']}**: `{p['elig']}` → `{p['prize']}`")
-
-    if ps['cumul']:
-        st.subheader("📈 월 누계")
-        st.markdown(f"- 대상: `{ps['cumul']['elig']}` → 시상: `{ps['cumul']['prize']}`")
 
     if ps['bridge']:
         st.subheader("🌉 브릿지")
