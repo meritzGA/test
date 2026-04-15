@@ -1,1651 +1,1155 @@
+"""
+manage_v2.py — GA3본부 시상 자동 관리 시스템 (Ver 2.0)
+======================================================
+• data/ 폴더의 Excel 파일을 자동 감지·병합
+• 컬럼 패턴 분석으로 시상 구조 자동 인식
+• 매니저 로그인 → 산하 설계사 실적·시상 자동 표시
+
+배포 방법:
+  1. data/ 폴더에 PRIZE_SUM_OUT_YYYYMMDD.xlsx, PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx push
+  2. Streamlit Cloud 자동 배포 → 최신 파일 자동 반영
+"""
+
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
-import os
-import json
 import re
+import os
+import glob
+import json
+import uuid
+import base64
 from datetime import datetime
-import streamlit.components.v1 as components
 
-st.set_page_config(page_title="메리츠화재 시상 현황", layout="wide")
+st.set_page_config(page_title="GA3본부 시상 관리 시스템", layout="wide")
 
-DATA_DIR = "app_data"
-if not os.path.exists(DATA_DIR): os.makedirs(DATA_DIR)
+DATA_DIR = "data"
+SETTINGS_FILE = "settings.json"
 
-LOG_FILE = os.path.join(DATA_DIR, "access_log.csv")
-
-# ★ 추가: 전역 설정 파일 (기준일 등)
-GLOBAL_CONFIG_FILE = os.path.join(DATA_DIR, "global_config.json")
-
-def load_global_config():
-    if os.path.exists(GLOBAL_CONFIG_FILE):
-        try:
-            with open(GLOBAL_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            pass
-    return {}
-
-def save_global_config(gcfg):
-    with open(GLOBAL_CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(gcfg, f, ensure_ascii=False, indent=2)
-
-if 'global_config' not in st.session_state:
-    st.session_state['global_config'] = load_global_config()
-# ★ 추가 끝
-
-# ==========================================
-# 🔧 numpy 타입 JSON 직렬화 지원
-# ==========================================
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, (np.integer,)): return int(obj)
-        if isinstance(obj, (np.floating,)): return float(obj)
-        if isinstance(obj, np.ndarray): return obj.tolist()
-        if isinstance(obj, (np.bool_,)): return bool(obj)
-        return super().default(obj)
-
-import re as _re
-def _clean_excel_text(s):
-    if not s or not isinstance(s, str): return s
-    return _re.sub(r'_x([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
-
-def save_log(user_name, user_code, action_type):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_data = pd.DataFrame([[now, user_name, user_code, action_type]], columns=["시간","이름/구분","코드","작업"])
-    if not os.path.exists(LOG_FILE): log_data.to_csv(LOG_FILE, index=False, encoding="utf-8-sig")
-    else: log_data.to_csv(LOG_FILE, mode='a', header=False, index=False, encoding="utf-8-sig")
-
-def copy_btn_component(text):
-    escaped_text = json.dumps(text, ensure_ascii=False)
-    js_code = f"""
-    <div id="copy-container"><button id="copy-btn">💬 카카오톡 메시지 원클릭 복사</button></div>
-    <script>
-    document.getElementById("copy-btn").onclick = function() {{
-        const text = {escaped_text};
-        navigator.clipboard.writeText(text).then(function() {{
-            alert("메시지가 복사되었습니다! 원하시는 채팅창에 붙여넣기(Ctrl+V) 하세요.");
-        }}, function(err) {{ console.error('복사 실패:', err); }});
-    }}
-    </script>
-    <style>
-        #copy-btn {{ width:100%; height:55px; background-color:#FEE500; color:#3C1E1E;
-            border:none; border-radius:12px; font-weight:800; font-size:1.1rem;
-            cursor:pointer; margin-top:5px; margin-bottom:20px; box-shadow:0 4px 10px rgba(0,0,0,0.1); }}
-        #copy-btn:active {{ transform:scale(0.98); }}
-    </style>"""
-    components.html(js_code, height=85)
-
-def safe_str(val):
-    if pd.isna(val) or val is None: return ""
-    try:
-        if isinstance(val, (int, float)) and float(val).is_integer(): val = int(float(val))
-    except: pass
-    s = str(val)
-    s = re.sub(r'_[xX]([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
-    s = re.sub(r'\s+', '', s)
-    if s.endswith('.0'): s = s[:-2]
-    return s.upper()
-
-def get_clean_series(df, col_name):
-    clean_col_name = f"_clean_{col_name}"
-    if clean_col_name not in df.columns:
-        df[clean_col_name] = df[col_name].apply(safe_str)
-    return df[clean_col_name]
-
-def safe_float(val):
-    if pd.isna(val) or val is None: return 0.0
-    s = str(val).replace(',', '').strip()
-    try: return float(s)
-    except: return 0.0
-
-def _get_idx(val, opts):
-    return opts.index(val) if val in opts else 0
-
-def _get_cols_for_file(file_name):
-    df = st.session_state['raw_data'].get(file_name)
-    if df is not None:
-        return [c for c in df.columns.tolist() if not c.startswith('_clean_')]
-    return []
-
-# ==========================================
-# 🔗 사전 병합(Pre-Merge)
-# ==========================================
-def build_merged_data(config_list, raw_data):
-    merged = {}
-    for idx, cfg in enumerate(config_list):
-        base_file = cfg.get('file', '')
-        df_base = raw_data.get(base_file)
-        if df_base is None: continue
-        result = df_base.copy()
-        col_code = cfg.get('col_code', '')
-        if not col_code or col_code not in result.columns:
-            merged[idx] = result; continue
-        ext_files = {}
-        for pi in cfg.get('prize_items', []):
-            pi_file = pi.get('file', '') or ''
-            if not pi_file or pi_file == base_file: continue
-            if pi_file not in ext_files:
-                ext_files[pi_file] = {'col_code_ext': pi.get('col_code_ext', ''), 'cols': set()}
-            col_p = pi.get('col_prize', '')
-            col_e = pi.get('col_eligible', '')
-            if col_p: ext_files[pi_file]['cols'].add(col_p)
-            if col_e: ext_files[pi_file]['cols'].add(col_e)
-        if ext_files:
-            result['_merge_key'] = result[col_code].apply(safe_str)
-            for ext_fname, ext_info in ext_files.items():
-                df_ext = raw_data.get(ext_fname)
-                if df_ext is None: continue
-                col_code_ext = ext_info['col_code_ext']
-                if not col_code_ext or col_code_ext not in df_ext.columns: continue
-                available = [c for c in ext_info['cols'] if c in df_ext.columns]
-                if not available: continue
-                df_e = df_ext.copy()
-                df_e['_merge_key'] = df_e[col_code_ext].apply(safe_str)
-                for c in available:
-                    if c in result.columns: result.drop(columns=[c], inplace=True, errors='ignore')
-                keep = ['_merge_key'] + available
-                result = pd.merge(result, df_e[keep].drop_duplicates(subset=['_merge_key']),
-                                  on='_merge_key', how='left')
-            result.drop(columns=['_merge_key'], inplace=True, errors='ignore')
-        merged[idx] = result
-    return merged
-
-def save_merged_to_disk(merged_data):
-    for idx, df in merged_data.items():
-        df.to_pickle(os.path.join(DATA_DIR, f"_merged_{idx}.pkl"))
-    for f in os.listdir(DATA_DIR):
-        if f.startswith('_merged_') and f.endswith('.pkl'):
-            try:
-                fidx = int(f.replace('_merged_','').replace('.pkl',''))
-                if fidx not in merged_data: os.remove(os.path.join(DATA_DIR, f))
-            except: pass
-
-def load_merged_from_disk(config_list):
-    merged = {}
-    for idx in range(len(config_list)):
-        path = os.path.join(DATA_DIR, f"_merged_{idx}.pkl")
-        if os.path.exists(path):
-            df = pd.read_pickle(path)
-            df.columns = [_clean_excel_text(str(c)) for c in df.columns]
-            for col in df.select_dtypes(include='object').columns:
-                df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
-            merged[idx] = df
-    return merged
-
-def _get_merged_df(cfg_index):
-    merged = st.session_state.get('merged_data', {})
-    if cfg_index in merged: return merged[cfg_index]
-    cfg = st.session_state['config'][cfg_index]
-    return st.session_state['raw_data'].get(cfg.get('file', ''))
-
-# ==========================================
-# 📦 데이터 로딩
-# ==========================================
-if 'raw_data' not in st.session_state:
-    st.session_state['raw_data'] = {}
-    for file in os.listdir(DATA_DIR):
-        if file.endswith('.pkl') and not file.startswith('_merged_'):
-            df = pd.read_pickle(os.path.join(DATA_DIR, file))
-            df.columns = [_clean_excel_text(str(c)) for c in df.columns]
-            for col in df.select_dtypes(include='object').columns:
-                df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
-            st.session_state['raw_data'][file.replace('.pkl', '')] = df
-
-if 'config' not in st.session_state:
-    config_path = os.path.join(DATA_DIR, 'config.json')
-    if os.path.exists(config_path):
-        with open(config_path, 'r', encoding='utf-8') as f:
-            st.session_state['config'] = json.load(f)
-    else: st.session_state['config'] = []
-
-for c in st.session_state['config']:
-    if 'category' not in c: c['category'] = 'weekly'
-
-if 'merged_data' not in st.session_state:
-    merged = load_merged_from_disk(st.session_state['config'])
-    if merged: st.session_state['merged_data'] = merged
-    elif st.session_state['raw_data'] and st.session_state['config']:
-        st.session_state['merged_data'] = build_merged_data(st.session_state['config'], st.session_state['raw_data'])
-    else: st.session_state['merged_data'] = {}
-
-# --- CSS ---
+# ═══════════════════════════════════════════════════════
+# 0. CSS (메리츠 스타일)
+# ═══════════════════════════════════════════════════════
 st.markdown("""
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-    [data-testid="stAppViewContainer"] { background-color: #f2f4f6; color: #191f28; }
-    span.material-symbols-rounded, span[data-testid="stIconMaterial"] { display: none !important; }
-    div[data-testid="stRadio"] > div { display:flex; justify-content:center; background-color:#ffffff; padding:10px; border-radius:15px; margin-bottom:20px; margin-top:10px; box-shadow:0 4px 15px rgba(0,0,0,0.03); border:1px solid #e5e8eb; }
-    .title-band { background-color:rgb(128,0,0); color:#ffffff; font-size:1.4rem; font-weight:800; text-align:center; padding:16px; border-radius:12px; margin-bottom:24px; letter-spacing:-0.5px; box-shadow:0 4px 10px rgba(128,0,0,0.2); }
-    /* ★ 추가: 기준일 배지 */
-    .date-badge { display:inline-block; background:rgba(255,255,255,0.15); color:rgba(255,255,255,0.9); font-size:0.85rem; font-weight:600; padding:4px 12px; border-radius:20px; margin-top:6px; }
-    [data-testid="stForm"] { background-color:transparent; border:none; padding:0; margin-bottom:24px; }
-    .admin-title { color:#191f28; font-weight:800; font-size:1.8rem; margin-top:20px; }
-    .sub-title { color:#191f28; font-size:1.4rem; margin-top:30px; font-weight:700; }
-    .config-title { color:#191f28; font-size:1.3rem; margin:0; font-weight:700; }
-    .main-title { color:#191f28; font-weight:800; font-size:1.3rem; margin-bottom:15px; }
-    .blue-title { color:#1e3c72; font-size:1.4rem; margin-top:10px; font-weight:800; }
-    .agent-title { color:#3182f6; font-weight:800; font-size:1.5rem; margin-top:0; text-align:center; }
-    .config-box { background:#f9fafb; padding:15px; border-radius:15px; border:1px solid #e5e8eb; margin-top:15px; }
-    .config-box-blue { background:#f0f4f8; padding:15px; border-radius:15px; border:1px solid #c7d2fe; margin-top:15px; }
-    .detail-box { background:#ffffff; padding:20px; border-radius:20px; border:2px solid #e5e8eb; margin-top:10px; margin-bottom:30px; }
-    .summary-card { background:linear-gradient(135deg,rgb(160,20,20) 0%,rgb(128,0,0) 100%); border-radius:20px; padding:32px 24px; margin-bottom:24px; border:none; box-shadow:0 10px 25px rgba(128,0,0,0.25); }
-    .cumulative-card { background:linear-gradient(135deg,#1e3c72 0%,#2a5298 100%); border-radius:20px; padding:32px 24px; margin-bottom:24px; border:none; box-shadow:0 10px 25px rgba(30,60,114,0.25); }
-    .summary-label { color:rgba(255,255,255,0.85); font-size:1.15rem; font-weight:600; margin-bottom:8px; }
-    .summary-total { color:#ffffff; font-size:2.6rem; font-weight:800; letter-spacing:-1px; margin-bottom:24px; white-space:nowrap; word-break:keep-all; }
-    .summary-item-name { color:rgba(255,255,255,0.95); font-size:1.15rem; }
-    .summary-item-val { color:#ffffff; font-size:1.3rem; font-weight:800; white-space:nowrap; }
-    .summary-divider { height:1px; background-color:rgba(255,255,255,0.2); margin:16px 0; }
-    .toss-card { background:#ffffff; border-radius:20px; padding:28px 24px; margin-bottom:16px; border:1px solid #e5e8eb; box-shadow:0 4px 20px rgba(0,0,0,0.03); }
-    .toss-title { font-size:1.6rem; font-weight:700; color:#191f28; margin-bottom:6px; letter-spacing:-0.5px; }
-    .toss-desc { font-size:1.15rem; color:rgb(128,0,0); font-weight:800; margin-bottom:24px; letter-spacing:-0.3px; line-height:1.4; word-break:keep-all; }
-    .data-row { display:flex; justify-content:space-between; align-items:center; padding:12px 0; flex-wrap:nowrap; }
-    .data-label { color:#8b95a1; font-size:1.1rem; word-break:keep-all; }
-    .data-value { color:#333d4b; font-size:1.3rem; font-weight:600; white-space:nowrap; }
-    .shortfall-row { background-color:#fff0f0; padding:14px; border-radius:12px; margin-top:15px; margin-bottom:5px; border:2px dashed #ff4b4b; text-align:center; }
-    .shortfall-text { color:#d9232e; font-size:1.2rem; font-weight:800; word-break:keep-all; }
-    .prize-row { display:flex; justify-content:space-between; align-items:center; padding-top:20px; margin-top:12px; flex-wrap:nowrap; }
-    .prize-label { color:#191f28; font-size:1.3rem; font-weight:700; word-break:keep-all; white-space:nowrap; }
-    .prize-value { color:rgb(128,0,0); font-size:1.8rem; font-weight:800; white-space:nowrap; text-align:right; }
-    .toss-divider { height:1px; background-color:#e5e8eb; margin:16px 0; }
-    .cumul-stack-box { background:#ffffff; border:1px solid #e5e8eb; border-left:6px solid #2a5298; border-radius:16px; padding:20px 24px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 4px 15px rgba(0,0,0,0.03); }
-    .cumul-stack-info { display:flex; flex-direction:column; gap:4px; }
-    .cumul-stack-title { font-size:1.25rem; color:#1e3c72; font-weight:800; word-break:keep-all; }
-    .cumul-stack-val { font-size:1.05rem; color:#8b95a1; }
-    .cumul-stack-prize { font-size:1.6rem; color:#d9232e; font-weight:800; text-align:right; white-space:nowrap; }
-    div[data-testid="stTextInput"] input { font-size:1.3rem !important; padding:15px !important; height:55px !important; background-color:#ffffff !important; color:#191f28 !important; border:1px solid #e5e8eb !important; border-radius:12px !important; }
-    div[data-testid="stSelectbox"] > div { background-color:#ffffff !important; border:1px solid #e5e8eb !important; border-radius:12px !important; }
-    div[data-testid="stSelectbox"] * { font-size:1.1rem !important; }
-    div.stButton > button[kind="primary"] { font-size:1.4rem !important; font-weight:800 !important; height:60px !important; border-radius:12px !important; background-color:rgb(128,0,0) !important; color:white !important; border:none !important; width:100%; margin-top:10px; margin-bottom:20px; box-shadow:0 4px 15px rgba(128,0,0,0.2) !important; }
-    div.stButton > button[kind="secondary"] { font-size:1.2rem !important; font-weight:700 !important; min-height:60px !important; height:auto !important; padding:10px !important; border-radius:12px !important; background-color:#e8eaed !important; color:#191f28 !important; border:1px solid #d1d6db !important; width:100%; margin-top:5px; margin-bottom:5px; white-space:normal !important; }
-    /* 오늘 접촉 대상 카드 */
-    .contact-card { background:#ffffff; border-radius:20px; padding:22px 20px; margin-bottom:12px; border:1px solid #e5e8eb; box-shadow:0 4px 15px rgba(0,0,0,0.04); }
-    .contact-name { font-size:1.3rem; font-weight:800; color:#191f28; }
-    .contact-org { font-size:1.05rem; color:#8b95a1; margin-bottom:10px; }
-    .contact-prize-total { font-size:1.6rem; font-weight:800; color:rgb(128,0,0); text-align:right; }
-    .contact-shortfall { color:#d9232e; font-size:1.05rem; font-weight:700; }
-    .kakao-btn { display:block; width:100%; padding:14px; background:#FEE500; color:#3C1E1E; border:none; border-radius:12px; font-size:1.2rem; font-weight:800; cursor:pointer; text-align:center; margin-top:10px; box-shadow:0 3px 8px rgba(0,0,0,0.08); }
-    .kakao-btn:active { transform:scale(0.98); }
-    .copy-btn { display:block; width:100%; padding:14px; background:#FEE500; color:#3C1E1E; border:none; border-radius:12px; font-size:1.2rem; font-weight:800; cursor:pointer; text-align:center; margin-top:10px; box-shadow:0 3px 8px rgba(0,0,0,0.08); }
-    .msg-preview { background:#f9fafb; border:1px solid #e5e8eb; border-radius:12px; padding:14px; font-size:1.0rem; color:#333; white-space:pre-wrap; line-height:1.6; margin-top:8px; word-break:keep-all; }
-    @media (prefers-color-scheme: dark) {
-        [data-testid="stAppViewContainer"] { background-color:#121212 !important; color:#e0e0e0 !important; }
-        label, p, .stMarkdown p { color:#e0e0e0 !important; }
-        div[data-testid="stRadio"] > div { background-color:#1e1e1e !important; border-color:#333 !important; }
-        .admin-title,.sub-title,.config-title,.main-title { color:#ffffff !important; }
-        .blue-title,.agent-title { color:#66b2ff !important; }
-        .config-box { background-color:#1a1a1a !important; border-color:#333 !important; }
-        .config-box-blue { background-color:#121928 !important; border-color:#2a5298 !important; }
-        .detail-box { background-color:#121212 !important; border-color:#333 !important; }
-        .toss-card, .contact-card { background-color:#1e1e1e !important; border-color:#333 !important; }
-        .toss-title,.contact-name { color:#ffffff !important; } .toss-desc { color:#ff6b6b !important; }
-        .data-label,.contact-org { color:#a0aab5 !important; } .data-value { color:#ffffff !important; }
-        .prize-label { color:#ffffff !important; } .prize-value,.contact-prize-total { color:#ff4b4b !important; }
-        .toss-divider { background-color:#333 !important; }
-        .shortfall-row { background-color:#2a1215 !important; border-color:#ff4b4b !important; }
-        .shortfall-text,.contact-shortfall { color:#ff6b6b !important; }
-        .cumul-stack-box { background-color:#1e1e1e !important; border-color:#333 !important; border-left-color:#4da3ff !important; }
-        .cumul-stack-title { color:#4da3ff !important; } .cumul-stack-val { color:#a0aab5 !important; }
-        .cumul-stack-prize { color:#ff4b4b !important; }
-        div[data-testid="stTextInput"] input { background-color:#1e1e1e !important; color:#ffffff !important; border-color:#444 !important; }
-        div[data-testid="stSelectbox"] > div { background-color:#1e1e1e !important; color:#ffffff !important; border-color:#444 !important; }
-        div.stButton > button[kind="secondary"] { background-color:#2d2d2d !important; color:#ffffff !important; border-color:#444 !important; }
-        .msg-preview { background-color:#1a1a1a !important; border-color:#333 !important; color:#e0e0e0 !important; }
-    }
-    @media (max-width: 450px) {
-        .summary-total { font-size:2.1rem !important; } .prize-value { font-size:1.45rem !important; }
-        .toss-title { font-size:1.4rem !important; } .shortfall-text { font-size:1.05rem !important; }
-        .cumul-stack-title { font-size:1.15rem; } .cumul-stack-prize { font-size:1.4rem; }
-        .contact-prize-total { font-size:1.35rem !important; }
-    }
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+html, body, [class*="css"] {
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, 'Noto Sans KR', sans-serif;
+}
+.toss-header {
+    background-color: rgb(128, 0, 0); padding: 32px 40px;
+    border-radius: 20px; margin-bottom: 24px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+}
+.toss-title { color: #fff !important; font-size: 36px; font-weight: 800; margin: 0; letter-spacing: -0.5px; }
+.toss-subtitle { color: #ffcccc !important; font-size: 24px; font-weight: 700; margin-left: 10px; }
+.toss-desc { color: #f2f4f6 !important; font-size: 17px; margin: 12px 0 0 0; font-weight: 500; }
+.block-container { padding-left: 1.5rem !important; padding-right: 1.5rem !important; max-width: 100% !important; }
+iframe { width: 100% !important; }
+@media (max-width: 768px) {
+    .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+    .toss-header { padding: 18px 16px; border-radius: 14px; margin-bottom: 14px; }
+    .toss-title { font-size: 22px !important; }
+    .toss-subtitle { font-size: 14px !important; display: block; margin-left: 0; margin-top: 4px; }
+    .toss-desc { font-size: 13px !important; margin-top: 6px; }
+    iframe { min-height: 60vh !important; }
+    .stButton > button { width: 100% !important; padding: 10px !important; font-size: 15px !important; }
+}
+@media (max-width: 480px) {
+    .block-container { padding-left: 0.25rem !important; padding-right: 0.25rem !important; }
+    .toss-header { padding: 14px 12px; border-radius: 10px; }
+    .toss-title { font-size: 19px !important; }
+    .toss-subtitle { font-size: 12px !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# ⚙️ 공통 함수
-# ==========================================
-def _read_prize_items(cfg, match_df):
-    prize_details = []
-    items = cfg.get('prize_items', [])
-    if items:
-        for item in items:
-            col_prize = item.get('col_prize', '') or item.get('col', '')
-            label = item.get('label', '')
-            if not col_prize or col_prize not in match_df.columns: continue
-            col_elig = item.get('col_eligible', '')
-            if col_elig and col_elig in match_df.columns:
-                raw_elig = match_df[col_elig].values[0]
-                if pd.notna(raw_elig) and str(raw_elig).strip() != '':
-                    if safe_float(raw_elig) == 0: continue
-            amt = safe_float(match_df[col_prize].values[0])
-            prize_details.append({"label": label or col_prize, "amount": amt})
+
+# ═══════════════════════════════════════════════════════
+# 1. 설정 로드
+# ═══════════════════════════════════════════════════════
+DEFAULT_SETTINGS = {
+    "admin_password": "wolf7998",
+    "clip_footer": "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!",
+    "prize_labels": {
+        "base": "인보험 기본",
+        "상품": "상품 추가",
+        "상품추가": "상품 추가2",
+        "유퍼간편": "유퍼스트"
+    }
+}
+
+def load_settings():
+    settings = DEFAULT_SETTINGS.copy()
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                user = json.load(f)
+            for k, v in user.items():
+                if isinstance(v, dict) and isinstance(settings.get(k), dict):
+                    settings[k].update(v)
+                else:
+                    settings[k] = v
+        except Exception:
+            pass
+    return settings
+
+
+# ═══════════════════════════════════════════════════════
+# 2. 데이터 로딩
+# ═══════════════════════════════════════════════════════
+def decode_excel_text(val):
+    if pd.isna(val): return val
+    val_str = str(val)
+    if '_x' not in val_str: return val_str
+    def decode_match(m):
+        try: return chr(int(m.group(1), 16))
+        except: return m.group(0)
+    return re.sub(r'_x([0-9a-fA-F]{4})_', decode_match, val_str)
+
+def clean_key(val):
+    if pd.isna(val) or str(val).strip().lower() == 'nan': return ""
+    s = str(val).strip().replace(" ", "").upper()
+    if s.endswith('.0'): s = s[:-2]
+    return s
+
+def find_latest_files():
+    """data/ 폴더에서 날짜가 가장 큰 PRIZE 파일 쌍을 찾는다."""
+    if not os.path.exists(DATA_DIR):
+        return None, None, None
+
+    def _latest(pattern):
+        files = glob.glob(os.path.join(DATA_DIR, pattern))
+        if not files: return None
+        def _date(f):
+            m = re.search(r'(\d{8})', os.path.basename(f))
+            return m.group(1) if m else '00000000'
+        return max(files, key=_date)
+
+    sum_path = _latest("PRIZE_SUM_OUT_*.xlsx")
+    bridge_path = _latest("PRIZE_6_BRIDGE_OUT_*.xlsx")
+
+    data_date = None
+    if sum_path:
+        m = re.search(r'(\d{8})', os.path.basename(sum_path))
+        if m:
+            d = m.group(1)
+            data_date = f"{d[:4]}.{d[4:6]}.{d[6:8]}"
+
+    return sum_path, bridge_path, data_date
+
+@st.cache_data(show_spinner="데이터를 로딩하고 있습니다...")
+def load_and_merge(_sum_path, _bridge_path):
+    """두 Excel 파일을 읽고 설계사코드 기준으로 병합."""
+    def _read(path):
+        df = pd.read_excel(path)
+        df.columns = [decode_excel_text(c) if isinstance(c, str) else c for c in df.columns]
+        for col in df.columns:
+            if df[col].dtype == 'object' or pd.api.types.is_string_dtype(df[col]):
+                df[col] = df[col].apply(decode_excel_text)
+        return df
+
+    df_sum = _read(_sum_path)
+    merge_col = '대리점설계사조직코드'
+    df_sum['_key'] = df_sum[merge_col].apply(clean_key)
+
+    if _bridge_path and os.path.exists(_bridge_path):
+        df_bridge = _read(_bridge_path)
+        df_bridge['_key'] = df_bridge[merge_col].apply(clean_key)
+        # 브릿지 파일에서 SUM과 겹치지 않는 컬럼만 가져오기
+        bridge_only_cols = [c for c in df_bridge.columns
+                           if c not in df_sum.columns or c == '_key']
+        df_merged = pd.merge(df_sum, df_bridge[bridge_only_cols],
+                             on='_key', how='left')
     else:
-        col_prize = cfg.get('col_prize', '')
-        if col_prize and col_prize in match_df.columns:
-            amt = safe_float(match_df[col_prize].values[0])
-            if amt != 0: prize_details.append({"label": "시상금", "amount": amt})
-    return prize_details
+        df_merged = df_sum.copy()
 
-def calculate_agent_performance(target_code):
-    calculated_results = []
-    for cfg_idx, cfg in enumerate(st.session_state['config']):
-        df = _get_merged_df(cfg_idx)
-        if df is None: continue
-        col_code = cfg.get('col_code', '')
-        if not col_code or col_code not in df.columns: continue
-        match_df = df[get_clean_series(df, col_code) == safe_str(target_code)]
-        if match_df.empty: continue
-        cat = cfg.get('category', 'weekly')
-        p_type = cfg.get('type', '구간 시책')
-        prize_details = _read_prize_items(cfg, match_df)
-        prize = sum(d['amount'] for d in prize_details)
-        if cat == 'weekly':
-            if "1기간" in p_type:
-                if not prize_details: continue
-                vp = safe_float(match_df[cfg['col_val_prev']].values[0]) if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
-                vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
-                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"브릿지1","val_prev":vp,"val_curr":vc,"prize":prize,"prize_details":prize_details,"curr_req":float(cfg.get('curr_req',100000.0))})
-            elif "2기간" in p_type:
-                vp = safe_float(match_df[cfg['col_val_prev']].values[0]) if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
-                vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
-                curr_req = float(cfg.get('curr_req', 100000.0))
-                calc_rate=0; tier_achieved=0; prize=0
-                for amt, rate in cfg.get('tiers', []):
-                    if vp >= amt: tier_achieved=amt; calc_rate=rate; break
-                if tier_achieved > 0: prize = (tier_achieved + curr_req) * (calc_rate / 100)
-                next_tier = None
-                for amt, rate in reversed(cfg.get('tiers', [])):
-                    if vp < amt: next_tier = amt; break
-                curr_met = vc >= curr_req
-                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"브릿지2","val_prev":vp,"val_curr":vc,"tier":tier_achieved,"rate":calc_rate,"prize":prize,"curr_req":curr_req,"next_tier":next_tier,"shortfall":next_tier - vp if next_tier else 0,"curr_met":curr_met})
-            elif "주차브릿지" in p_type:
-                w3 = safe_float(match_df[cfg['col_val_w3']].values[0]) if cfg.get('col_val_w3') and cfg['col_val_w3'] in df.columns else 0
-                w3_label = cfg.get('w3_label', '3주')
-                w4_label = cfg.get('w4_label', '4주')
-                wb_tiers = cfg.get('weekly_bridge_tiers', [])
-                tier_achieved = 0; projected_prize = 0
-                for threshold, prize_amt in wb_tiers:
-                    if w3 >= threshold:
-                        tier_achieved = threshold; projected_prize = prize_amt; break
-                next_tier = None; next_tier_prize = 0
-                for threshold, prize_amt in reversed(wb_tiers):
-                    if w3 < threshold: next_tier = threshold; next_tier_prize = prize_amt; break
-                shortfall = max(0, (next_tier or 0) - w3) if next_tier else 0
-                if w3 == 0: continue
-                calculated_results.append({
-                    "name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"주차브릿지",
-                    "val_w3":w3,
-                    "tier":tier_achieved,"prize":projected_prize,
-                    "next_tier":next_tier,"next_tier_prize":next_tier_prize if next_tier else 0,
-                    "shortfall":shortfall,
-                    "w3_label":w3_label,"w4_label":w4_label
-                })
-            # ★ 추가: 월초브릿지 시책 계산 로직
-            elif "월초브릿지" in p_type:
-                # 전월 말 실적 (예: 30~31일)
-                vp = safe_float(match_df[cfg['col_val_prev']].values[0]) if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
-                # 당월 초 실적 (예: 1~5일)
-                vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
-                prev_req = float(cfg.get('prev_req', 100000.0))
-                prev_met = vp >= prev_req
-                prev_label = cfg.get('prev_label', '전월 말')
-                curr_label = cfg.get('curr_label', '당월 초')
-                # 당월 초 실적 기준 구간/지급률 매칭
-                tier_achieved = 0; calc_rate = 0
-                for amt, rate in cfg.get('tiers', []):
-                    if vc >= amt:
-                        tier_achieved = amt; calc_rate = rate; break
-                # 시상금 = (전월말 실적 + 당월초 실적) × 지급률
-                prize = (vp + vc) * (calc_rate / 100) if prev_met and tier_achieved > 0 else 0
-                # 다음 구간 정보
-                next_tier = None; next_tier_rate = 0
-                for amt, rate in reversed(cfg.get('tiers', [])):
-                    if vc < amt: next_tier = amt; next_tier_rate = rate; break
-                shortfall = max(0, (next_tier or 0) - vc) if next_tier else 0
-                next_tier_prize = (vp + next_tier) * (next_tier_rate / 100) if next_tier else 0
-                # 양쪽 다 0이면 스킵
-                if vp == 0 and vc == 0: continue
-                calculated_results.append({
-                    "name": cfg['name'], "desc": cfg.get('desc', ''),
-                    "category": "weekly", "type": "월초브릿지",
-                    "val_prev": vp, "val_curr": vc,
-                    "prev_req": prev_req, "prev_met": prev_met,
-                    "prev_label": prev_label, "curr_label": curr_label,
-                    "tier": tier_achieved, "rate": calc_rate,
-                    "prize": prize,
-                    "next_tier": next_tier, "next_tier_rate": next_tier_rate,
-                    "next_tier_prize": next_tier_prize,
-                    "shortfall": shortfall
-                })
-            # ★ 추가 끝
-            else:
-                if not prize_details: continue
-                v = safe_float(match_df[cfg['col_val']].values[0]) if cfg.get('col_val') and cfg['col_val'] in df.columns else 0
-                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"구간","val":v,"prize":prize,"prize_details":prize_details})
-        elif cat == 'cumulative':
-            if not prize_details: continue
-            col_val = cfg.get('col_val', '')
-            v = safe_float(match_df[col_val].values[0]) if col_val and col_val in match_df.columns else 0
-            calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"cumulative","type":"누계","val":v,"prize":prize,"prize_details":prize_details})
-    return calculated_results, sum(r['prize'] for r in calculated_results)
+    return df_merged
 
-def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_text=False):
-    if not calculated_results: return
-
-    # ★ 추가: 기준일 가져오기
-    data_date = st.session_state.get('global_config', {}).get('data_date', '')
-    date_html = f"<div class='date-badge'>📅 기준일: {data_date}</div>" if data_date else ""
-
-    weekly_res = [r for r in calculated_results if r['category'] == 'weekly']
-    cumul_res = [r for r in calculated_results if r['category'] == 'cumulative']
-    weekly_total = sum(r['prize'] for r in weekly_res)
-    cumul_total = sum(r['prize'] for r in cumul_res)
-    share_text = f"🎯 [{user_name} 팀장님 실적 현황]\n"
-    if data_date:
-        share_text += f"📅 기준일: {data_date}\n"
-    share_text += f"💰 총 합산 시상금: {total_prize_sum:,.0f}원\n────────────────\n"
-    if weekly_res:
-        # ★ 수정: summary-card 안에 기준일 표시
-        sh = f"<div class='summary-card'><div class='summary-label'>{user_name} 팀장님의 시책 현황</div>{date_html}<div class='summary-total'>{weekly_total:,.0f}원</div><div class='summary-divider'></div>"
-        share_text += "📌 [진행 중인 시책]\n"
-        for res in weekly_res:
-            if res['type'] == "브릿지1":
-                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(다음 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
-            elif res['type'] == "브릿지2":
-                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(이번 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (이번 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
-            elif res['type'] == "주차브릿지":
-                w3l = res.get('w3_label','3주'); w4l = res.get('w4_label','4주')
-                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>({w4l} 동일 가동 시 예상)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 ({w4l} 동일 가동 시 예상)\n"
-            # ★ 추가: 월초브릿지 요약 카드
-            elif res['type'] == "월초브릿지":
-                prev_label = res.get('prev_label', '전월 말')
-                curr_label = res.get('curr_label', '당월 초')
-                cond_text = f"{prev_label} {int(res['prev_req']//10000)}만 가동"
-                if res.get('prev_met'):
-                    sub_text = f"({cond_text} ✅)"
-                else:
-                    sub_text = f"({cond_text} 조건 미충족)"
-                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>{sub_text}</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 {sub_text}\n"
-            # ★ 추가 끝
-            else:
-                sh += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원\n"
-        sh += "</div>"
-        st.markdown(sh, unsafe_allow_html=True)
-        for res in weekly_res:
-            desc_html = res['desc'].replace('\n','<br>') if res.get('desc') else ''
-            details = res.get('prize_details', [])
-            pdh = ""
-            if len(details) > 1:
-                for d in details: pdh += f"<div class='data-row'><span class='data-label'>{d['label']}</span><span class='data-value' style='color:rgb(128,0,0);'>{d['amount']:,.0f}원</span></div>"
-                pdh += "<div class='toss-divider'></div>"
-            if res['type'] == "구간":
-                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>현재 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
-                share_text += f"\n[{res['name']}]\n- 현재실적: {res['val']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
-                for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
-            elif res['type'] == "브릿지1":
-                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>다음 달 {int(res['curr_req']//10000)}만 가동 시<br>시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
-                share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원\n- 당월실적: {res['val_curr']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
-                for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
-            elif res['type'] == "브릿지2":
-                curr_req_val = int(res['curr_req']//10000)
-                if res.get('curr_met'):
-                    curr_status = f"<div class='data-row'><span class='data-label'>이번 달 {curr_req_val}만 가동</span><span class='data-value' style='color:#2e7d32;font-weight:800;'>✅ 달성</span></div>"
-                    prize_label = "예상 시상금"
-                else:
-                    curr_short = res['curr_req'] - res['val_curr']
-                    curr_status = f"<div class='data-row'><span class='data-label'>이번 달 {curr_req_val}만 가동</span><span class='data-value' style='color:#d9232e;font-weight:800;'>❌ 미달 ({curr_short:,.0f}원 부족)</span></div>"
-                    prize_label = f"이번 달 {curr_req_val}만 달성 시<br>예상 시상금"
-                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 브릿지 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div><div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div><div class='toss-divider'></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div>{curr_status}<div class='toss-divider'></div><div class='prize-row'><span class='prize-label'>{prize_label}</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
-                met_txt = "달성 ✅" if res.get('curr_met') else "미달 ❌"
-                share_text += f"\n[{res['name']}]\n- 2/19~28일 실적: {res['val_prev']:,.0f}원 (구간: {res['tier']:,.0f}원)\n- 당월실적: {res['val_curr']:,.0f}원 ({curr_req_val}만 가동 {met_txt})\n- 예상시상: {res['prize']:,.0f}원\n"
-            elif res['type'] == "주차브릿지":
-                w3l = res.get('w3_label','3주'); w4l = res.get('w4_label','4주')
-                tier_txt = f"{res['tier']:,.0f}원" if res['tier'] > 0 else "미달성"
-                shortfall_html = ""
-                if res.get('next_tier') and res['shortfall'] > 0:
-                    shortfall_html = (
-                        f"<div class='shortfall-row'><div class='shortfall-text'>"
-                        f"📈 {res['shortfall']:,.0f}원 더 하면 → {res['next_tier']:,.0f}원 구간 "
-                        f"(시상금 {res['next_tier_prize']:,.0f}원)</div></div>"
-                    )
-                ch = (
-                    f"<div class='toss-card'>"
-                    f"<div class='toss-title'>{res['name']}</div>"
-                    f"<div class='toss-desc'>{desc_html}</div>"
-                    f"<div class='data-row'><span class='data-label'>{w3l} 실적</span><span class='data-value'>{res['val_w3']:,.0f}원</span></div>"
-                    f"<div class='data-row'><span class='data-label'>확보 구간</span><span class='data-value'>{tier_txt}</span></div>"
-                    f"<div class='toss-divider'></div>"
-                    f"{shortfall_html}"
-                    f"<div class='prize-row'><span class='prize-label'>{w4l} 동일 가동 시<br>예상 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
-                    f"</div>"
-                )
-                share_text += (
-                    f"\n[{res['name']}]\n"
-                    f"- {w3l} 실적: {res['val_w3']:,.0f}원 (구간: {tier_txt})\n"
-                    f"- {w4l} 동일 가동 시 예상시상: {res['prize']:,.0f}원\n"
-                )
-                if res.get('next_tier') and res['shortfall'] > 0:
-                    share_text += f"  📈 {res['shortfall']:,.0f}원 더 하면 → {res['next_tier_prize']:,.0f}원\n"
-            # ★ 추가: 월초브릿지 상세 카드
-            elif res['type'] == "월초브릿지":
-                prev_label = res.get('prev_label', '전월 말')
-                curr_label = res.get('curr_label', '당월 초')
-                prev_req_val = int(res['prev_req'] // 10000)
-                # 전월 말 가동 달성 여부
-                if res.get('prev_met'):
-                    prev_status = f"<div class='data-row'><span class='data-label'>{prev_label} {prev_req_val}만 가동</span><span class='data-value' style='color:#2e7d32;font-weight:800;'>✅ 달성</span></div>"
-                else:
-                    prev_short = res['prev_req'] - res['val_prev']
-                    prev_status = f"<div class='data-row'><span class='data-label'>{prev_label} {prev_req_val}만 가동</span><span class='data-value' style='color:#d9232e;font-weight:800;'>❌ 미달 ({prev_short:,.0f}원 부족)</span></div>"
-                # 구간 정보
-                tier_txt = f"{res['tier']:,.0f}원 (지급률 {res['rate']:g}%)" if res['tier'] > 0 else "미달성"
-                # 다음 구간 shortfall
-                shortfall_html = ""
-                if res.get('next_tier') and res['shortfall'] > 0:
-                    shortfall_html = (
-                        f"<div class='shortfall-row'><div class='shortfall-text'>"
-                        f"📈 {curr_label} {res['shortfall']:,.0f}원 더 하면 → {res['next_tier']:,.0f}원 구간 "
-                        f"(지급률 {res['next_tier_rate']:g}%, 시상금 {res['next_tier_prize']:,.0f}원)</div></div>"
-                    )
-                # 시상금 라벨
-                if not res.get('prev_met'):
-                    prize_label = f"{prev_label} {prev_req_val}만 달성 시<br>예상 시상금"
-                else:
-                    prize_label = "예상 시상금"
-                ch = (
-                    f"<div class='toss-card'>"
-                    f"<div class='toss-title'>{res['name']}</div>"
-                    f"<div class='toss-desc'>{desc_html}</div>"
-                    f"<div class='data-row'><span class='data-label'>{prev_label} 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div>"
-                    f"{prev_status}"
-                    f"<div class='toss-divider'></div>"
-                    f"<div class='data-row'><span class='data-label'>{curr_label} 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div>"
-                    f"<div class='data-row'><span class='data-label'>확보 구간</span><span class='data-value'>{tier_txt}</span></div>"
-                    f"<div class='toss-divider'></div>"
-                    f"{shortfall_html}"
-                    f"<div class='prize-row'><span class='prize-label'>{prize_label}</span><span class='prize-value'>{res['prize']:,.0f}원</span></div>"
-                    f"</div>"
-                )
-                prev_met_txt = "달성 ✅" if res.get('prev_met') else "미달 ❌"
-                share_text += (
-                    f"\n[{res['name']}]\n"
-                    f"- {prev_label} 실적: {res['val_prev']:,.0f}원 ({prev_req_val}만 가동 {prev_met_txt})\n"
-                    f"- {curr_label} 실적: {res['val_curr']:,.0f}원 (구간: {tier_txt})\n"
-                    f"- 예상시상: {res['prize']:,.0f}원\n"
-                )
-                if res.get('next_tier') and res['shortfall'] > 0:
-                    share_text += f"  📈 {res['shortfall']:,.0f}원 더 하면 → {res['next_tier_prize']:,.0f}원\n"
-            # ★ 추가 끝
-            st.markdown(ch, unsafe_allow_html=True)
-    if cumul_res:
-        # ★ 수정: cumulative-card에도 기준일 표시 (weekly가 없을 때를 위해)
-        date_in_cumul = date_html if not weekly_res else ""
-        ch = f"<div class='cumulative-card'><div class='summary-label'>{user_name} 팀장님의 월간 누계 시상</div>{date_in_cumul}<div class='summary-total'>{cumul_total:,.0f}원</div><div class='summary-divider'></div>"
-        share_text += f"\n🏆 [월간 확정 누계 시상]\n"
-        for res in cumul_res:
-            ch += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
-            share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (누계 {res['val']:,.0f}원)\n"
-        ch += "</div>"
-        st.markdown(ch, unsafe_allow_html=True)
-        st.markdown("<h3 class='blue-title'>📈 세부 항목별 시상금</h3>", unsafe_allow_html=True)
-        sh = ""
-        for res in cumul_res:
-            details = res.get('prize_details', [])
-            dl = ""
-            if len(details) > 1:
-                for d in details: dl += f"<span class='cumul-stack-val'>{d['label']}: {d['amount']:,.0f}원</span>"
-            else: dl = f"<span class='cumul-stack-val'>누계실적: {res['val']:,.0f}원</span>"
-            sh += f"<div class='cumul-stack-box'><div class='cumul-stack-info'><span class='cumul-stack-title'>{res['name']}</span>{dl}</div><div class='cumul-stack-prize'>{res['prize']:,.0f}원</div></div>"
-        st.markdown(sh, unsafe_allow_html=True)
-    if show_share_text:
-        st.markdown("<h4 class='main-title' style='margin-top:10px;'>💬 카카오톡 바로 공유하기</h4>", unsafe_allow_html=True)
-        copy_btn_component(share_text)
+def _safe_float(val):
+    if pd.isna(val) or val is None: return 0.0
+    try: return float(str(val).replace(',', '').strip())
+    except: return 0.0
 
 
-# ==========================================
-# 📞 오늘 접촉 대상 - 카카오 전송 컴포넌트
-# ==========================================
-def render_kakao_send_btn(msg_key, agent_name, btn_key, height=80):
-    html = f"""
-    <div id="kw_{btn_key}" style="margin-top:6px;">
-      <button id="kb_{btn_key}" onclick="doSend_{btn_key}()"
-        style="width:100%;padding:13px 8px;background:#FEE500;color:#3C1E1E;border:none;
-               border-radius:12px;font-size:1.05rem;font-weight:800;cursor:pointer;
-               box-shadow:0 3px 8px rgba(0,0,0,0.1);">
-        💬 {agent_name} 팀장님께 카카오톡 보내기
-      </button>
-      <div id="kd_{btn_key}" style="display:none;text-align:center;padding:8px 0;
-           font-weight:700;color:#2e7d32;font-size:0.95rem;"></div>
-    </div>
-    <script>
-    function doSend_{btn_key}() {{
-        var text = '';
-        try {{
-            var labelKey = '{msg_key}';
-            var parentDoc = window.parent.document;
-            var containers = parentDoc.querySelectorAll('[data-testid="stTextArea"]');
-            for (var i = 0; i < containers.length; i++) {{
-                var label = containers[i].querySelector('label');
-                var ta    = containers[i].querySelector('textarea');
-                if (ta && label && label.textContent.trim() === labelKey) {{
-                    text = ta.value; break;
-                }}
-            }}
-            if (!text) {{
-                var ta2 = parentDoc.querySelector('textarea[aria-label="' + labelKey + '"]') ||
-                          parentDoc.querySelector('textarea[id*="' + labelKey + '"]');
-                if (ta2) text = ta2.value;
-            }}
-        }} catch(e) {{}}
-        var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-        function showDone(msg) {{
-            document.getElementById('kb_{btn_key}').style.display = 'none';
-            var d = document.getElementById('kd_{btn_key}');
-            d.style.display = 'block';
-            d.innerHTML = msg;
-        }}
-        function copyToClipboard(cb) {{
-            if (navigator.clipboard && window.isSecureContext) {{
-                navigator.clipboard.writeText(text).then(cb).catch(function() {{
-                    legacyCopy(); cb();
-                }});
-            }} else {{ legacyCopy(); cb(); }}
-        }}
-        function legacyCopy() {{
-            var ta = document.createElement('textarea');
-            ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
-            document.body.appendChild(ta); ta.select();
-            document.execCommand('copy'); document.body.removeChild(ta);
-        }}
-        if (isMobile) {{
-            if (navigator.share) {{
-                navigator.share({{ text: text }})
-                    .then(function() {{ showDone('✅ 공유 완료!'); }})
-                    .catch(function(e) {{
-                        copyToClipboard(function() {{
-                            showDone('✅ 복사 완료! 카카오톡에서 붙여넣기 하세요.');
-                            setTimeout(function() {{ window.location.href='kakaotalk://launch'; }}, 400);
-                        }});
-                    }});
-            }} else {{
-                copyToClipboard(function() {{
-                    showDone('✅ 복사! 카카오톡 실행 중...');
-                    setTimeout(function() {{ window.location.href='kakaotalk://launch'; }}, 400);
-                }});
-            }}
-        }} else {{
-            copyToClipboard(function() {{
-                showDone('✅ 복사 완료! 카카오톡 채팅창에 Ctrl+V 하세요.');
-                setTimeout(function() {{
-                    document.getElementById('kd_{btn_key}').style.display = 'none';
-                    document.getElementById('kb_{btn_key}').style.display = 'block';
-                }}, 2500);
-            }});
-        }}
-    }}
-    </script>
+# ═══════════════════════════════════════════════════════
+# 3. 시상 구조 자동 감지 엔진
+# ═══════════════════════════════════════════════════════
+def detect_prize_structure(df, settings):
+    """컬럼명 패턴을 분석하여 시상 구조를 자동 생성.
+    Returns dict:
+        weeks: {N: {"perf_col", "prizes": [{"label", "elig_col", "prize_col"}]}}
+        combined: [{"label", "elig_col", "prize_col"}]
+        cumulative: {"perf_col", "elig_col", "prize_col"} or None
+        bridge: {...} or None
+        consecutive: {...} or None
+        next_bridge: {...} or None
     """
-    components.html(html, height=height)
+    cols = set(df.columns)
+    labels = settings.get('prize_labels', DEFAULT_SETTINGS['prize_labels'])
 
+    # ── 주차별 시상 감지 ──
+    # 대상 컬럼 패턴: 추가13회예정금_{N}주대상, 추가13회예정금_{N}주대상_상품 등
+    week_pattern = re.compile(r'^추가13회예정금_(\d+)주대상$')
+    sub_pattern = re.compile(r'^추가13회예정금_(\d+)주대상_(.+)$')
+    combined_pattern = re.compile(r'^추가13회예정금_(\d+)_(\d+)주대상$')
 
-# ==========================================
-# 📞 오늘 접촉 대상 페이지
-# ==========================================
-def page_contact():
-    st.markdown('<div class="title-band">📞 오늘 접촉 대상</div>', unsafe_allow_html=True)
+    detected_weeks = {}
+    for c in sorted(cols):
+        # 기본 대상
+        m = week_pattern.match(c)
+        if m:
+            w = int(m.group(1))
+            prize_col = f'추가13회예정금_{w}주'
+            if prize_col in cols:
+                detected_weeks.setdefault(w, []).append({
+                    'label': labels.get('base', '인보험 기본'),
+                    'elig_col': c,
+                    'prize_col': prize_col
+                })
 
-    BRIDGE_COLS = [
-        '브릿지대상_2_3월', '브릿지실적구간_2월', '연속가동대상_2_3월',
-        '브릿지실적_2월', '연속가동실적_2월', '연속가동실적구간_2월',
-        '브릿지실적_3월', '브릿지부족금액_3월'
-    ]
+        # 서브 타입 대상 (_상품, _상품추가, _유퍼)
+        m2 = sub_pattern.match(c)
+        if m2:
+            w = int(m2.group(1))
+            suffix = m2.group(2)
+            # 대상 suffix → 예정금 suffix 매핑
+            suffix_map = {
+                '상품': '상품', '상품추가': '상품추가', '유퍼': '유퍼간편'
+            }
+            prize_suffix = suffix_map.get(suffix, suffix)
+            prize_col = f'추가13회예정금_{w}주_{prize_suffix}'
+            if prize_col in cols:
+                display_label = labels.get(prize_suffix, labels.get(suffix, suffix))
+                detected_weeks.setdefault(w, []).append({
+                    'label': display_label,
+                    'elig_col': c,
+                    'prize_col': prize_col
+                })
 
-    bridge_df     = None
-    mgr_code_col  = None
-    agent_name_col= None
-    agency_col    = None
-    mgr_name_col  = None
+    weeks = {}
+    for w in sorted(detected_weeks.keys()):
+        perf_col = f'실적_{w}주차'
+        if perf_col not in cols:
+            perf_col = None
+        weeks[w] = {
+            'perf_col': perf_col,
+            'prizes': detected_weeks[w]
+        }
 
-    for cfg in st.session_state.get('config', []):
-        if not mgr_code_col:   mgr_code_col   = cfg.get('col_manager_code','') or cfg.get('col_manager','')
-        if not agent_name_col: agent_name_col = cfg.get('col_name','')
-        if not agency_col:     agency_col     = cfg.get('col_agency','') or cfg.get('col_branch','')
+    # ── 합산 주차 감지 (1_2주 등) ──
+    combined = []
+    for c in sorted(cols):
+        m = combined_pattern.match(c)
+        if m:
+            a, b = m.group(1), m.group(2)
+            prize_col = f'추가13회예정금_{a}_{b}주'
+            if prize_col in cols:
+                combined.append({
+                    'label': f'{a}~{b}주 합산',
+                    'elig_col': c,
+                    'prize_col': prize_col
+                })
 
-    best_score = 0
-    for fname, df in st.session_state['raw_data'].items():
-        score = sum(1 for c in BRIDGE_COLS if c in df.columns)
-        if score > best_score:
-            best_score = score
-            bridge_df  = df
-            for col in df.columns:
-                if not mgr_code_col   and any(k in col for k in ('매니저코드','지원매니저코드','매니저_코드')): mgr_code_col   = col
-                if not mgr_name_col   and any(k in col for k in ('매니저명','지원매니저명','담당매니저명')):     mgr_name_col   = col
-                if not agent_name_col and any(k in col for k in ('성명','이름','설계사명')):                    agent_name_col = col
-                if not agency_col     and any(k in col for k in ('대리점명','소속','지사명')):                  agency_col     = col
+    # ── 월 누계 ──
+    cumulative = None
+    if '추가13회예정금_월대상' in cols and '추가13회예정금계' in cols:
+        cumulative = {
+            'perf_col': '실적계',
+            'elig_col': '추가13회예정금_월대상',
+            'prize_col': '추가13회예정금계'
+        }
 
-    if bridge_df is None or best_score == 0:
-        st.warning("⚠️ 브릿지 데이터 파일을 찾을 수 없습니다. 관리자 화면에서 업로드해주세요.")
-        st.info(f"필요 컬럼: {', '.join(BRIDGE_COLS)}")
-        return
-
-    missing_cols = [c for c in BRIDGE_COLS if c not in bridge_df.columns]
-    if missing_cols:
-        st.warning(f"⚠️ 일부 컬럼 없음: {', '.join(missing_cols)}")
-
-    if 'contact_logged_in' not in st.session_state:
-        st.session_state.contact_logged_in = False
-
-    if not st.session_state.contact_logged_in:
-        st.markdown("<h3 class='main-title'>지원매니저 코드를 입력하세요</h3>", unsafe_allow_html=True)
-        mgr_input = st.text_input("매니저 코드", type="password", placeholder="예: 12345", label_visibility="collapsed")
-        if st.button("접촉 대상 조회하기", type="primary"):
-            if not mgr_input:
-                st.warning("코드를 입력해주세요.")
-            else:
-                sic   = safe_str(mgr_input)
-                found = False
-                if mgr_code_col and mgr_code_col in bridge_df.columns:
-                    if sic in get_clean_series(bridge_df, mgr_code_col).unique(): found = True
-                if not found:
-                    for ci, cfg in enumerate(st.session_state.get('config', [])):
-                        mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
-                        if mc:
-                            df = _get_merged_df(ci)
-                            if df is not None and mc in df.columns:
-                                if sic in get_clean_series(df, mc).unique():
-                                    found = True; mgr_code_col = mc; break
-                if found:
-                    st.session_state.contact_logged_in  = True
-                    st.session_state.contact_mgr_code   = sic
-                    for k in list(st.session_state.keys()):
-                        if k.startswith('cmsg_'): del st.session_state[k]
-                    st.rerun()
-                else:
-                    st.error(f"❌ 코드 '{mgr_input}'가 데이터에 없습니다.")
-        return
-
-    mgr_code = st.session_state.contact_mgr_code
-    col_lo, _ = st.columns([2, 8])
-    with col_lo:
-        if st.button("🚪 로그아웃"):
-            st.session_state.contact_logged_in = False
-            st.rerun()
-
-    mgr_name = ""
-    if mgr_name_col and mgr_name_col in bridge_df.columns and mgr_code_col and mgr_code_col in bridge_df.columns:
-        mdf = bridge_df[get_clean_series(bridge_df, mgr_code_col) == mgr_code]
-        if not mdf.empty: mgr_name = _clean_excel_text(safe_str(mdf[mgr_name_col].values[0]))
-    if not mgr_name:
-        for ci, cfg in enumerate(st.session_state.get('config', [])):
-            mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
-            mn = cfg.get('col_manager_name','')
-            if mc and mn:
-                df = _get_merged_df(ci)
-                if df is not None and mc in df.columns and mn in df.columns:
-                    mdf = df[get_clean_series(df, mc) == mgr_code]
-                    if not mdf.empty: mgr_name = _clean_excel_text(safe_str(mdf[mn].values[0])); break
-
-    display_mgr = mgr_name if mgr_name else mgr_code
-
-    if not (mgr_code_col and mgr_code_col in bridge_df.columns):
-        st.error("⚠️ 매니저 코드 컬럼을 찾을 수 없습니다.")
-        return
-
-    raw_df = bridge_df[get_clean_series(bridge_df, mgr_code_col) == mgr_code].copy().reset_index(drop=True)
-    if raw_df.empty:
-        st.info("해당 매니저의 접촉 대상이 없습니다.")
-        return
-
-    if '브릿지실적_2월' in raw_df.columns:
-        raw_df = raw_df[raw_df['브릿지실적_2월'].apply(safe_float) >= 100000].reset_index(drop=True)
-
-    if raw_df.empty:
-        st.info("브릿지실적_2월 10만원 이상인 접촉 대상이 없습니다.")
-        return
-
-    rows = []
-    for i, row in raw_df.iterrows():
-        def gv(col, r=row):
-            return safe_float(r.get(col, 0))
-
-        aname  = _clean_excel_text(safe_str(row[agent_name_col])) if agent_name_col and agent_name_col in row.index else f"설계사{i+1}"
-        agency = _clean_excel_text(safe_str(row[agency_col]))     if agency_col     and agency_col     in row.index else ""
-
-        br2  = gv('브릿지실적_2월')
-        btir = gv('브릿지실적구간_2월')
-        cr2  = gv('연속가동실적_2월')
-        ctir = gv('연속가동실적구간_2월')
-        br3  = gv('브릿지실적_3월')
-        bsf  = gv('브릿지부족금액_3월')
-
-        if btir >= 500000:   b_rate = 3.0
-        elif btir >= 200000: b_rate = 2.0
-        else:                b_rate = 1.0
-        bp = (btir + 100000) * b_rate
-
-        if ctir >= 500000:   c_rate = 3.0
-        elif ctir >= 200000: c_rate = 2.0
-        else:                c_rate = 1.0
-        cp = (ctir + 100000) * c_rate
-
-        tp = bp + cp
-
-        achieved = (br3 >= 100000)
-        if achieved:
-            msg_default = f"달성!"
-        else:
-            msg_default = (
-                f"★{aname} 팀장님!★  안녕하세요. {display_mgr} 매니저입니다.\n\n"
-                f"팀장님께 좋은 소식 전해드리려고 연락드렸어요! 🎉\n"
-                f"8일 마감이었던 브릿지+연속가동 2배 시상이\n"
-                f"★15일까지 연장★되었습니다!\n\n"
-                f"지난 2월 브릿지 실적 {br2:,.0f}원 으로 \n"
-                f"{bp:,.0f}원 브릿지 시상에\n"
-                f"연속가동 실적 {cr2:,.0f}원 으로 \n"
-                f"{cp:,.0f}원 연속가동 시상까지\n"
-                f"합산 ★{tp:,.0f}원★ 을 아직 받으실 수 있습니다.\n\n"
-                f"그런데 현재 {br3:,.0f}원 이셔서 \n"
-                f"{bsf:,.0f}원이 부족하세요. T_T\n"
-                f"15일까지 10만원만 하시면 됩니다!\n\n"
-                f"오늘 10만원 하실 수 있는 플랜은 \n"
-                f"1. 가장 체결률 좋은 진단및치료비 + 비통치, 항암 26종 플랜\n"
-                f"2. 지난 달보다 진단비 가격이 10%나 하락한 5.10.5\n"
-                f"3. 새로나온 표적항암 2억에 1만원도 안되는 1.2.3 또또암 플랜 등이 있습니다.\n\n"
-                f"지금 바로 연락주시면 설계 도와드릴께요!\n"
-                f"오늘도 좋은 하루 되시고 시상금 꼭 챙겨가세요!"
-            )
-        rows.append(dict(
-            idx=i, aname=aname, agency=agency,
-            br2=br2, btir=btir, cr2=cr2, ctir=ctir,
-            br3=br3, bsf=bsf, bp=bp, cp=cp, tp=tp,
-            achieved=achieved, msg_default=msg_default
+    # ── 브릿지 (BRIDGE 파일에서 온 컬럼) ──
+    bridge = None
+    if '브릿지시상금' in cols:
+        # 월 감지: 브릿지실적_{M}월
+        b_months = sorted(set(
+            int(m.group(1))
+            for c in cols
+            for m in [re.match(r'^브릿지실적_(\d+)월$', c)]
+            if m
         ))
+        prev_m = b_months[0] if len(b_months) >= 1 else None
+        curr_m = b_months[1] if len(b_months) >= 2 else None
+        bridge = {
+            'prev_perf': f'브릿지실적_{prev_m}월' if prev_m else None,
+            'curr_perf': f'브릿지실적_{curr_m}월' if curr_m else None,
+            'prize_col': '브릿지시상금',
+            'tier_prev': f'브릿지실적구간_{prev_m}월' if prev_m and f'브릿지실적구간_{prev_m}월' in cols else None,
+            'tier_curr': f'브릿지실적구간_{curr_m}월' if curr_m and f'브릿지실적구간_{curr_m}월' in cols else None,
+            'target_col': f'브릿지실적목표_{curr_m}월' if curr_m and f'브릿지실적목표_{curr_m}월' in cols else None,
+            'shortfall_col': f'브릿지부족금액_{curr_m}월' if curr_m and f'브릿지부족금액_{curr_m}월' in cols else None,
+            'months': b_months,
+            'label_prev': f'{prev_m}월' if prev_m else '',
+            'label_curr': f'{curr_m}월' if curr_m else '',
+        }
 
-    rows.sort(key=lambda r: r['tp'], reverse=True)
+    # ── 연속가동 ──
+    consecutive = None
+    if '연속가동시상금' in cols:
+        c_months = sorted(set(
+            int(m.group(1))
+            for c in cols
+            for m in [re.match(r'^연속가동실적_(\d+)월$', c)]
+            if m
+        ))
+        prev_m = c_months[0] if len(c_months) >= 1 else None
+        curr_m = c_months[1] if len(c_months) >= 2 else None
+        consecutive = {
+            'prev_perf': f'연속가동실적_{prev_m}월' if prev_m else None,
+            'curr_perf': f'연속가동실적_{curr_m}월' if curr_m else None,
+            'prize_col': '연속가동시상금',
+            'target_col': f'연속가동실적목표_{curr_m}월' if curr_m and f'연속가동실적목표_{curr_m}월' in cols else None,
+            'shortfall_col': f'연속가동부족금액_{curr_m}월' if curr_m and f'연속가동부족금액_{curr_m}월' in cols else None,
+            'months': c_months,
+            'label_prev': f'{prev_m}월' if prev_m else '',
+            'label_curr': f'{curr_m}월' if curr_m else '',
+        }
 
-    is_mobile = st.session_state.get('contact_view', 'desktop') == 'mobile'
+    # ── 차기 브릿지 (SUM 파일 프리뷰) ──
+    next_bridge = None
+    nb_pattern = re.compile(r'^브릿지실적_(\d+)_(\d+)월$')
+    for c in sorted(cols):
+        m = nb_pattern.match(c)
+        if m:
+            a, b = m.group(1), m.group(2)
+            next_bridge = {
+                'label': f'{a}~{b}월 브릿지',
+                'perf_col': c,
+                'target_col': f'브릿지실적목표_{a}_{b}월' if f'브릿지실적목표_{a}_{b}월' in cols else None,
+                'shortfall_col': f'브릿지실적부족액_{a}_{b}월' if f'브릿지실적부족액_{a}_{b}월' in cols else None,
+                'tier_col': f'브릿지실적구간_{a}_{b}월' if f'브릿지실적구간_{a}_{b}월' in cols else None,
+            }
+            break  # 하나만
 
-    mgr_label = f"{mgr_name} 매니저" if mgr_name else f"코드 {mgr_code}"
-    hdr_c, tog_c = st.columns([9, 1])
-    with hdr_c:
-        st.markdown(
-            f"<h3 class='main-title' style='margin-bottom:4px;'>📋 {mgr_label}님 접촉 대상 — {len(rows)}명</h3>",
-            unsafe_allow_html=True
-        )
-    with tog_c:
-        cur_icon = "📱" if is_mobile else "🖥️"
-        if st.button(cur_icon, key="cv_tog"):
-            nxt = 'desktop' if is_mobile else 'mobile'
-            st.session_state['contact_view'] = nxt
-            st.rerun()
+    return {
+        'weeks': weeks,
+        'combined': combined,
+        'cumulative': cumulative,
+        'bridge': bridge,
+        'consecutive': consecutive,
+        'next_bridge': next_bridge,
+    }
 
-    if is_mobile:
-        st.caption("📱 합계 시상금 큰 순 · 버튼 클릭 시 카카오톡 공유 화면으로 이동")
-    else:
-        st.caption("🖥️ 합계 시상금 큰 순 · 메시지 직접 수정 후 복사")
 
-    for r in rows:
-        skey = f"cmsg_{r['idx']}"
-        if skey not in st.session_state:
-            st.session_state[skey] = r['msg_default']
+# ═══════════════════════════════════════════════════════
+# 4. 표시용 DataFrame 빌더 + 시상금 계산
+# ═══════════════════════════════════════════════════════
+def build_display(my_df, ps, settings):
+    """자동 감지된 구조(ps)를 바탕으로 표시용 DataFrame,
+    컬럼 그룹, 시상금 맵을 생성.
 
-    if not is_mobile:
-        for r in rows:
-            skey = f"cmsg_{r['idx']}"
-            if r['achieved']:
-                sf_badge = "<span style='color:#2e7d32;font-size:0.85rem;font-weight:800;'>🏆 달성!</span>"
-                card_bg  = "#f0faf4"
-                border   = "2px solid #81c995"
+    Returns: (display_df, col_groups, prize_data_map)
+    """
+    out = pd.DataFrame(index=my_df.index)
+
+    # 기본 정보
+    if '대리점지사명' in my_df.columns:
+        out['지사'] = my_df['대리점지사명']
+    if '대리점설계사명' in my_df.columns:
+        out['설계사명'] = my_df['대리점설계사명']
+
+    col_groups = []
+
+    # ── 주차별 ──
+    for w, info in ps['weeks'].items():
+        grp_cols = []
+        if info['perf_col'] and info['perf_col'] in my_df.columns:
+            label = f'{w}주 실적'
+            out[label] = my_df[info['perf_col']]
+            grp_cols.append(label)
+
+        # 주차별 시상 합계 (개별 prize_col 합산)
+        prize_sum_label = f'{w}주 시상'
+        prize_sum = pd.Series(0.0, index=my_df.index)
+        has_any = False
+        for p in info['prizes']:
+            if p['prize_col'] in my_df.columns:
+                vals = pd.to_numeric(my_df[p['prize_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                prize_sum += vals
+                has_any = True
+        if has_any:
+            out[prize_sum_label] = prize_sum
+            grp_cols.append(prize_sum_label)
+
+        if grp_cols:
+            col_groups.append({'name': f'{w}주차', 'cols': grp_cols})
+
+    # ── 합산 주차 ──
+    for comb in ps.get('combined', []):
+        if comb['prize_col'] in my_df.columns:
+            label = f"{comb['label']} 시상"
+            vals = pd.to_numeric(my_df[comb['prize_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            # 대상 체크
+            if comb['elig_col'] in my_df.columns:
+                elig = pd.to_numeric(my_df[comb['elig_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                vals = vals.where(elig != 0, 0)
+            out[label] = vals
+
+    # ── 누계 ──
+    cumul_grp = []
+    if '실적계' in my_df.columns:
+        out['실적 누계'] = my_df['실적계']
+        cumul_grp.append('실적 누계')
+    if '시상금계' in my_df.columns:
+        out['기본 시상'] = my_df['시상금계']
+        cumul_grp.append('기본 시상')
+    if ps['cumulative'] and ps['cumulative']['prize_col'] in my_df.columns:
+        vals = pd.to_numeric(my_df[ps['cumulative']['prize_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        if ps['cumulative']['elig_col'] in my_df.columns:
+            elig = pd.to_numeric(my_df[ps['cumulative']['elig_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            vals = vals.where(elig != 0, 0)
+        out['추가 누계'] = vals
+        cumul_grp.append('추가 누계')
+    if cumul_grp:
+        col_groups.append({'name': '누계', 'cols': cumul_grp})
+
+    # ── 브릿지 ──
+    if ps['bridge']:
+        b = ps['bridge']
+        b_grp = []
+        if b['prev_perf'] and b['prev_perf'] in my_df.columns:
+            lbl = f"브릿지 {b['label_prev']}"
+            out[lbl] = my_df[b['prev_perf']]
+            b_grp.append(lbl)
+        if b['curr_perf'] and b['curr_perf'] in my_df.columns:
+            lbl = f"브릿지 {b['label_curr']}"
+            out[lbl] = my_df[b['curr_perf']]
+            b_grp.append(lbl)
+        if b['prize_col'] in my_df.columns:
+            out['브릿지 시상'] = my_df[b['prize_col']]
+            b_grp.append('브릿지 시상')
+        if b.get('shortfall_col') and b['shortfall_col'] in my_df.columns:
+            out['브릿지 부족액'] = my_df[b['shortfall_col']]
+            b_grp.append('브릿지 부족액')
+        if b_grp:
+            col_groups.append({'name': '브릿지', 'cols': b_grp})
+
+    # ── 연속가동 ──
+    if ps['consecutive']:
+        c = ps['consecutive']
+        c_grp = []
+        if c['prev_perf'] and c['prev_perf'] in my_df.columns:
+            lbl = f"연속 {c['label_prev']}"
+            out[lbl] = my_df[c['prev_perf']]
+            c_grp.append(lbl)
+        if c['curr_perf'] and c['curr_perf'] in my_df.columns:
+            lbl = f"연속 {c['label_curr']}"
+            out[lbl] = my_df[c['curr_perf']]
+            c_grp.append(lbl)
+        if c['prize_col'] in my_df.columns:
+            out['연속 시상'] = my_df[c['prize_col']]
+            c_grp.append('연속 시상')
+        if c.get('shortfall_col') and c['shortfall_col'] in my_df.columns:
+            out['연속 부족액'] = my_df[c['shortfall_col']]
+            c_grp.append('연속 부족액')
+        if c_grp:
+            col_groups.append({'name': '연속가동', 'cols': c_grp})
+
+    # ── 차기 브릿지 ──
+    if ps['next_bridge']:
+        nb = ps['next_bridge']
+        nb_grp = []
+        if nb['perf_col'] in my_df.columns:
+            lbl = f"{nb['label']} 실적"
+            out[lbl] = my_df[nb['perf_col']]
+            nb_grp.append(lbl)
+        if nb.get('shortfall_col') and nb['shortfall_col'] in my_df.columns:
+            lbl = f"{nb['label']} 부족"
+            out[lbl] = my_df[nb['shortfall_col']]
+            nb_grp.append(lbl)
+        if nb_grp:
+            col_groups.append({'name': nb['label'], 'cols': nb_grp})
+
+    # ── 총 시상금 계산 ──
+    total = pd.Series(0.0, index=my_df.index)
+    if '시상금계and추가예정금계' in my_df.columns:
+        total += pd.to_numeric(my_df['시상금계and추가예정금계'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    elif '시상금계' in my_df.columns:
+        total += pd.to_numeric(my_df['시상금계'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    if ps['bridge'] and ps['bridge']['prize_col'] in my_df.columns:
+        total += pd.to_numeric(my_df[ps['bridge']['prize_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    if ps['consecutive'] and ps['consecutive']['prize_col'] in my_df.columns:
+        total += pd.to_numeric(my_df[ps['consecutive']['prize_col']].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    out['총 시상금'] = total
+
+    # ── 순번 삽입 ──
+    out.insert(0, '순번', range(1, len(out) + 1))
+
+    # ── 포맷팅 ──
+    skip_fmt = {'순번'}
+    for c in out.columns:
+        if c in skip_fmt:
+            continue
+        out[c] = out[c].apply(_format_cell)
+
+    # ── 시상 상세 맵 (팝업/카톡용) ──
+    prize_data_map = {}
+    for row_idx, (orig_idx, row) in enumerate(my_df.iterrows()):
+        details = _build_prize_details(row, ps)
+        if details['total'] > 0:
+            prize_data_map[row_idx] = details
+
+    return out, col_groups, prize_data_map
+
+def _format_cell(val):
+    try:
+        if pd.isna(val) or str(val).strip() == '': return ''
+        s = str(val).replace(',', '')
+        n = float(s)
+        if n == 0: return ''
+        if n == int(n): return f'{int(n):,}'
+        return f'{n:,.1f}'
+    except:
+        s = str(val).strip()
+        return '' if s in ('0', '0.0', 'nan') else s
+
+def _build_prize_details(row, ps):
+    """한 행(설계사)에 대한 시상 상세 내역 구성."""
+    weekly_items = []
+    for w, info in ps['weeks'].items():
+        week_prizes = []
+        for p in info['prizes']:
+            if p['prize_col'] not in row.index: continue
+            elig = _safe_float(row.get(p['elig_col'], 1))
+            if elig == 0: continue
+            amt = _safe_float(row.get(p['prize_col'], 0))
+            if amt > 0:
+                week_prizes.append({'label': p['label'], 'amount': amt})
+        perf = _safe_float(row.get(info['perf_col'], 0)) if info['perf_col'] else 0
+        if week_prizes or perf > 0:
+            weekly_items.append({
+                'week': w, 'perf': perf,
+                'prizes': week_prizes,
+                'subtotal': sum(p['amount'] for p in week_prizes)
+            })
+
+    combined_items = []
+    for comb in ps.get('combined', []):
+        if comb['prize_col'] not in row.index: continue
+        elig = _safe_float(row.get(comb['elig_col'], 1))
+        if elig == 0: continue
+        amt = _safe_float(row.get(comb['prize_col'], 0))
+        if amt > 0:
+            combined_items.append({'label': comb['label'], 'amount': amt})
+
+    cumul_amt = 0
+    if ps['cumulative'] and ps['cumulative']['prize_col'] in row.index:
+        elig = _safe_float(row.get(ps['cumulative']['elig_col'], 1))
+        if elig != 0:
+            cumul_amt = _safe_float(row.get(ps['cumulative']['prize_col'], 0))
+
+    base_prize = _safe_float(row.get('시상금계', 0))
+    extra_prize = _safe_float(row.get('추가예정금계', 0))
+
+    bridge_info = None
+    if ps['bridge']:
+        b = ps['bridge']
+        bp = _safe_float(row.get(b['prize_col'], 0))
+        bridge_info = {
+            'prev': _safe_float(row.get(b['prev_perf'], 0)) if b['prev_perf'] else 0,
+            'curr': _safe_float(row.get(b['curr_perf'], 0)) if b['curr_perf'] else 0,
+            'prize': bp,
+            'shortfall': _safe_float(row.get(b.get('shortfall_col', ''), 0)),
+            'target': _safe_float(row.get(b.get('target_col', ''), 0)),
+            'label_prev': b['label_prev'], 'label_curr': b['label_curr'],
+        }
+
+    consec_info = None
+    if ps['consecutive']:
+        c = ps['consecutive']
+        cp = _safe_float(row.get(c['prize_col'], 0))
+        consec_info = {
+            'prev': _safe_float(row.get(c['prev_perf'], 0)) if c['prev_perf'] else 0,
+            'curr': _safe_float(row.get(c['curr_perf'], 0)) if c['curr_perf'] else 0,
+            'prize': cp,
+            'shortfall': _safe_float(row.get(c.get('shortfall_col', ''), 0)),
+            'target': _safe_float(row.get(c.get('target_col', ''), 0)),
+            'label_prev': c['label_prev'], 'label_curr': c['label_curr'],
+        }
+
+    total = base_prize + extra_prize
+    if bridge_info: total += bridge_info['prize']
+    if consec_info: total += consec_info['prize']
+
+    return {
+        'weekly': weekly_items, 'combined': combined_items,
+        'cumul_amt': cumul_amt, 'base_prize': base_prize,
+        'extra_prize': extra_prize,
+        'bridge': bridge_info, 'consecutive': consec_info,
+        'total': total,
+    }
+
+
+# ═══════════════════════════════════════════════════════
+# 5. 카톡 텍스트 생성
+# ═══════════════════════════════════════════════════════
+def build_clip_text(row_display, details, data_date, footer):
+    """카카오톡 공유용 텍스트 생성."""
+    agency = str(row_display.get('지사', '')).strip()
+    name = str(row_display.get('설계사명', '')).strip()
+    person = f"{agency} {name}".strip()
+    if person and not person.endswith('님'):
+        person += ' 팀장님'
+
+    lines = []
+    if data_date:
+        lines.append(f"📅 {data_date} 기준")
+    lines.append(f"👤 {person}")
+
+    # 주차별
+    for wi in details['weekly']:
+        w = wi['week']
+        lines.append(f"\n📌 {w}주차: 실적 {wi['perf']:,.0f}원")
+        for p in wi['prizes']:
+            lines.append(f"  · {p['label']}: {p['amount']:,.0f}원")
+        if wi['subtotal'] > 0:
+            lines.append(f"  → 추가시상 소계: {wi['subtotal']:,.0f}원")
+
+    for ci in details['combined']:
+        lines.append(f"\n📎 {ci['label']}: {ci['amount']:,.0f}원")
+
+    # 브릿지
+    if details['bridge'] and (details['bridge']['prize'] > 0 or details['bridge']['shortfall'] > 0):
+        b = details['bridge']
+        lines.append(f"\n🌉 브릿지")
+        lines.append(f"  {b['label_prev']}: {b['prev']:,.0f}원 / {b['label_curr']}: {b['curr']:,.0f}원")
+        if b['prize'] > 0:
+            lines.append(f"  시상금: {b['prize']:,.0f}원")
+        if b['shortfall'] > 0:
+            lines.append(f"  🔴 부족액: {b['shortfall']:,.0f}원")
+
+    # 연속가동
+    if details['consecutive'] and (details['consecutive']['prize'] > 0 or details['consecutive']['shortfall'] > 0):
+        c = details['consecutive']
+        lines.append(f"\n🔗 연속가동")
+        lines.append(f"  {c['label_prev']}: {c['prev']:,.0f}원 / {c['label_curr']}: {c['curr']:,.0f}원")
+        if c['prize'] > 0:
+            lines.append(f"  시상금: {c['prize']:,.0f}원")
+        if c['shortfall'] > 0:
+            lines.append(f"  🔴 부족액: {c['shortfall']:,.0f}원")
+
+    # 총합
+    lines.append(f"\n💰 총 시상금: {details['total']:,.0f}원")
+    parts = []
+    if details['base_prize'] > 0: parts.append(f"기본 {details['base_prize']:,.0f}")
+    if details['extra_prize'] > 0: parts.append(f"추가 {details['extra_prize']:,.0f}")
+    if details['bridge'] and details['bridge']['prize'] > 0:
+        parts.append(f"브릿지 {details['bridge']['prize']:,.0f}")
+    if details['consecutive'] and details['consecutive']['prize'] > 0:
+        parts.append(f"연속 {details['consecutive']['prize']:,.0f}")
+    if parts:
+        lines.append(f"  ({' + '.join(parts)})")
+
+    if footer:
+        lines.append(f"\n{footer}")
+
+    return '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════════════════
+# 6. 시상 팝업 HTML 생성
+# ═══════════════════════════════════════════════════════
+def build_prize_popup_html(details):
+    """시상 상세 팝업용 HTML."""
+    if not details or details['total'] <= 0:
+        return ''
+
+    h = '<div style="padding:5px;">'
+    h += f'<div style="font-weight:800;color:#d9232e;font-size:18px;margin-bottom:4px;">💰 총 시상금: {details["total"]:,.0f}원</div>'
+
+    parts = []
+    if details['base_prize'] > 0: parts.append(f"기본 {details['base_prize']:,.0f}")
+    if details['extra_prize'] > 0: parts.append(f"추가 {details['extra_prize']:,.0f}")
+    if details.get('bridge') and details['bridge']['prize'] > 0:
+        parts.append(f"브릿지 {details['bridge']['prize']:,.0f}")
+    if details.get('consecutive') and details['consecutive']['prize'] > 0:
+        parts.append(f"연속 {details['consecutive']['prize']:,.0f}")
+    if parts:
+        h += f'<div style="color:#888;font-size:13px;margin-bottom:12px;">({" + ".join(parts)})</div>'
+
+    # 주차별
+    for wi in details['weekly']:
+        if not wi['prizes']: continue
+        h += f'<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 {wi["week"]}주차 (실적: {wi["perf"]:,.0f}원)</div>'
+        for p in wi['prizes']:
+            h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#555;">{p["label"]}</span><span style="color:#d9232e;font-weight:600;">{p["amount"]:,.0f}원</span></div>'
+
+    for ci in details['combined']:
+        h += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid #eee;margin-top:4px;"><span style="color:#555;font-weight:600;">📎 {ci["label"]}</span><span style="color:#d9232e;font-weight:700;">{ci["amount"]:,.0f}원</span></div>'
+
+    if details.get('bridge') and details['bridge']['prize'] > 0:
+        b = details['bridge']
+        h += f'<div style="font-size:12px;color:#d4380d;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">🌉 브릿지</div>'
+        h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#888;">{b["label_prev"]} 실적</span><span>{b["prev"]:,.0f}원</span></div>'
+        h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#888;">{b["label_curr"]} 실적</span><span>{b["curr"]:,.0f}원</span></div>'
+        h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#555;font-weight:600;">시상금</span><span style="color:#d9232e;font-weight:700;">{b["prize"]:,.0f}원</span></div>'
+        if b['shortfall'] > 0:
+            h += f'<div style="padding:2px 0;font-size:11px;color:#888;">🔴 부족액: {b["shortfall"]:,.0f}원 (목표: {b["target"]:,.0f}원)</div>'
+
+    if details.get('consecutive') and details['consecutive']['prize'] > 0:
+        c = details['consecutive']
+        h += f'<div style="font-size:12px;color:#2B6CB0;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">🔗 연속가동</div>'
+        h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#888;">{c["label_prev"]} 실적</span><span>{c["prev"]:,.0f}원</span></div>'
+        h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#888;">{c["label_curr"]} 실적</span><span>{c["curr"]:,.0f}원</span></div>'
+        h += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#555;font-weight:600;">시상금</span><span style="color:#d9232e;font-weight:700;">{c["prize"]:,.0f}원</span></div>'
+        if c['shortfall'] > 0:
+            h += f'<div style="padding:2px 0;font-size:11px;color:#888;">🔴 부족액: {c["shortfall"]:,.0f}원</div>'
+
+    h += '</div>'
+    return h
+
+
+# ═══════════════════════════════════════════════════════
+# 7. HTML 테이블 렌더링 (데스크탑 + 모바일)
+# ═══════════════════════════════════════════════════════
+def render_html_table(df, col_groups, prize_data_map, data_date, footer):
+    """DataFrame → 반응형 HTML 테이블 (정렬/틀고정/카드뷰/복사/시상팝업)"""
+    table_id = f"pt_{uuid.uuid4().hex[:8]}"
+    columns = list(df.columns)
+    num_cols = len(columns)
+    shortfall_cols = {c for c in columns if '부족' in c}
+
+    # 틀 고정 열 감지
+    freeze_kw = ['순번', '지사', '설계사', '이름']
+    freeze_count = 0
+    for i, col in enumerate(columns):
+        if any(kw in col for kw in freeze_kw):
+            freeze_count = i + 1
+    freeze_count = min(freeze_count, 4)
+
+    has_groups = len(col_groups) > 0
+    base_font = max(11, 15 - num_cols // 4)
+
+    GROUP_COLORS = ['#2B6CB0', '#2F855A', '#9B2C2C', '#6B46C1',
+                    '#B7791F', '#2C7A7B', '#C05621', '#702459']
+
+    col_to_group = {}
+    group_color_map = {}
+    for gi, grp in enumerate(col_groups):
+        color = GROUP_COLORS[gi % len(GROUP_COLORS)]
+        group_color_map[grp['name']] = color
+        for c in grp['cols']:
+            col_to_group[c] = grp['name']
+
+    group_mid = {}
+    for gname in set(col_to_group.values()):
+        indices = [i for i, c in enumerate(columns) if col_to_group.get(c) == gname]
+        if indices: group_mid[gname] = indices[len(indices) // 2]
+
+    group_info = []
+    for i, col in enumerate(columns):
+        gname = col_to_group.get(col)
+        if gname is None:
+            group_info.append((None, False, False, False))
+        else:
+            prev_g = col_to_group.get(columns[i-1]) if i > 0 else None
+            next_g = col_to_group.get(columns[i+1]) if i < len(columns)-1 else None
+            group_info.append((gname, prev_g != gname, next_g != gname, i == group_mid.get(gname, -1)))
+
+    def fc(i):
+        if i >= freeze_count: return ""
+        c = "cf"
+        if i == freeze_count - 1: c += " cfl"
+        return c
+
+    grp_h, col_h = 30, 36
+
+    # ── 클립보드 텍스트 생성 ──
+    clip_texts = []
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        if row_idx in prize_data_map:
+            details = prize_data_map[row_idx]
+        else:
+            details = {'total': 0, 'weekly': [], 'combined': [], 'base_prize': 0,
+                       'extra_prize': 0, 'bridge': None, 'consecutive': None, 'cumul_amt': 0}
+        clip_texts.append(build_clip_text(row.to_dict(), details, data_date, footer))
+
+    clip_b64 = base64.b64encode(json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')).decode('ascii')
+
+    # ── 시상 팝업 HTML 생성 ──
+    prize_htmls = []
+    for row_idx in range(len(df)):
+        if row_idx in prize_data_map:
+            prize_htmls.append(build_prize_popup_html(prize_data_map[row_idx]))
+        else:
+            prize_htmls.append('')
+    prize_b64 = base64.b64encode(json.dumps(prize_htmls, ensure_ascii=False).encode('utf-8')).decode('ascii')
+
+    # ══════════════════════ HTML 빌드 ══════════════════════
+    mob_font = max(9, base_font - 2)
+
+    html = f"""<style>
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+*{{box-sizing:border-box}}html,body{{margin:0;padding:0;font-family:'Pretendard',-apple-system,'Noto Sans KR',sans-serif}}
+.tw{{width:100%;max-height:85vh;overflow:auto;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.08);-webkit-overflow-scrolling:touch}}
+.pt{{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;white-space:nowrap;font-size:{base_font}px}}
+.pt thead th{{background:#4e5968;color:#fff;font-weight:700;text-align:center;border:1px solid #3d4654;position:sticky;z-index:2;cursor:pointer;user-select:none}}
+.pt .rg th{{top:0;height:{grp_h}px;padding:4px 6px;cursor:default}}.pt .rg .ge{{background:#4e5968;border-bottom-color:#4e5968}}
+.pt .rg .gc{{border-left:none;border-right:none}}.pt .rg .gc-f{{border-left:1px solid #3d4654;border-right:none}}
+.pt .rg .gc-l{{border-left:none;border-right:1px solid #3d4654}}.pt .rg .gc-s{{border-left:1px solid #3d4654;border-right:1px solid #3d4654}}
+.pt .rc th{{top:{grp_h if has_groups else 0}px;height:{col_h}px;padding:6px 10px}}.pt .rc th .gb{{display:none;height:4px;border-radius:2px;margin:0 auto 3px;width:80%}}
+.pt thead th:hover{{background:#3d4654}}.sa{{margin-left:3px;font-size:10px;opacity:.5}}.sa.active{{opacity:1}}
+.pt tbody td{{text-align:center;padding:6px 10px;border:1px solid #e5e8eb;white-space:nowrap;background:#fff}}
+.pt tbody tr:nth-child(even) td{{background:#f7f8fa}}.pt tbody tr:hover td{{background:#eef1f6}}
+.sc{{color:rgb(128,0,0);font-weight:700}}
+.cf{{position:sticky;z-index:1}}thead th.cf{{z-index:3}}.cfl{{box-shadow:2px 0 5px rgba(0,0,0,.08)}}
+@media(max-width:768px){{.tw{{max-height:75vh;border-radius:8px}}.pt{{font-size:{mob_font}px}}.pt thead th,.pt tbody td{{padding:4px 5px}}
+.pt .rg{{display:none}}.pt .rc th{{top:0!important;padding:5px 5px 4px}}.pt .rc th .gb{{display:block}}.sa{{font-size:8px;margin-left:1px}}.cfl{{box-shadow:2px 0 3px rgba(0,0,0,.12)}}}}
+@media(max-width:480px){{.pt{{font-size:{max(8,mob_font-1)}px}}.pt thead th,.pt tbody td{{padding:3px}}.pt .rc th .gb{{height:3px;margin-bottom:2px}}}}
+.dv{{display:block}}.mv{{display:none}}
+@media(max-width:768px){{.dv{{display:none!important}}.mv{{display:block!important}}}}
+.mv{{padding:0 4px;max-height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch}}
+.mc{{background:#fff;border-radius:12px;margin-bottom:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border:1px solid #e5e8eb}}
+.mh{{display:flex;align-items:center;flex-wrap:wrap;padding:14px;cursor:pointer;gap:6px;position:relative}}
+.mn{{background:#4e5968;color:#fff;font-size:11px;font-weight:700;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}}
+.mname{{font-size:16px;font-weight:700;color:#191f28}}
+.ms{{display:flex;gap:6px;margin-left:auto;flex-shrink:0}}
+.chev{{font-size:10px;color:#8b95a1;margin-left:6px;transition:transform .2s}}
+.mc.open .chev{{transform:rotate(180deg)}}
+.mb{{max-height:0;overflow:hidden;transition:max-height .3s ease;border-top:1px solid #f2f4f6}}
+.mc.open .mb{{max-height:3000px}}
+.mgl{{font-size:12px;font-weight:700;color:#4e5968;padding:8px 14px 4px;margin-top:4px}}
+.mr{{display:flex;justify-content:space-between;padding:6px 14px;font-size:14px}}
+.mr:nth-child(even){{background:#f9fafb}}.ml{{color:#6b7684;font-weight:500;flex-shrink:0;margin-right:12px}}.mval{{color:#191f28;font-weight:600;text-align:right}}
+.mr.msc .mval{{color:rgb(128,0,0);font-weight:800}}
+.mcopy{{width:100%;padding:10px;border:none;border-radius:10px;background:linear-gradient(135deg,#FEE500,#F5D600);color:#3C1E1E;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 2px 6px rgba(0,0,0,.08)}}
+.mcopy:active{{transform:scale(.97)}}.mcopy.copied{{background:linear-gradient(135deg,#22C55E,#16A34A);color:#fff}}
+.dcopy{{border:none;border-radius:6px;padding:4px 10px;background:#FEE500;color:#3C1E1E;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .15s}}
+.dcopy:hover{{background:#F5D600}}.dcopy.copied{{background:#22C55E;color:#fff}}
+</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+"""
+
+    # ── 데스크탑 테이블 ──
+    html += '<div class="dv">'
+    html += f'<div class="tw" id="wrap_{table_id}"><table class="pt" id="{table_id}"><thead>'
+
+    if has_groups:
+        html += '<tr class="rg">'
+        for i, col in enumerate(columns):
+            gname, is_f, is_l, is_t = group_info[i]
+            f_cls = fc(i)
+            if gname is None:
+                html += f'<th class="ge {f_cls}" data-col="{i}"></th>'
             else:
-                sf_badge = (f"<span style='color:#d9232e;font-size:0.85rem;font-weight:700;'>"
-                            f"⚠️ {r['bsf']:,.0f}원 부족</span>") if r['bsf'] > 0 else \
-                           "<span style='color:#2e7d32;font-size:0.85rem;font-weight:700;'>✅ 달성</span>"
-                card_bg  = "#fff"
-                border   = "1px solid #e5e8eb"
+                gc = group_color_map.get(gname, '#364152')
+                if is_f and is_l: b_cls = "gc-s"
+                elif is_f: b_cls = "gc-f"
+                elif is_l: b_cls = "gc-l"
+                else: b_cls = "gc"
+                text = gname if is_t else ""
+                html += f'<th class="{b_cls} {f_cls}" style="background:{gc}" data-col="{i}">{text}</th>'
+        html += '<th class="ge" data-col="-1"></th></tr>'
 
-            info_html = f"""
-            <div style='background:{card_bg};border:{border};border-radius:12px;
-                        padding:12px 14px;height:100%;'>
-                <div style='font-size:1.1rem;font-weight:800;color:#191f28;margin-bottom:4px;'>
-                    👤 {r['aname']}
-                </div>
-                <div style='font-size:0.9rem;color:#8b95a1;margin-bottom:8px;'>
-                    📍 {r['agency'] if r['agency'] else '—'}
-                </div>
-                <div style='background:#fff8f8;border-radius:8px;padding:6px 10px;margin-bottom:4px;'>
-                    <span style='font-size:0.8rem;color:#8b95a1;'>브릿지 시상금</span>
-                    <span style='font-size:1.05rem;font-weight:800;color:rgb(128,0,0);
-                                float:right;'>{r['bp']:,.0f}원</span>
-                </div>
-                <div style='background:#f8f8ff;border-radius:8px;padding:6px 10px;margin-bottom:6px;'>
-                    <span style='font-size:0.8rem;color:#8b95a1;'>연속가동 시상금</span>
-                    <span style='font-size:1.05rem;font-weight:800;color:#1e3c72;
-                                float:right;'>{r['cp']:,.0f}원</span>
-                </div>
-                <div style='display:flex;justify-content:space-between;align-items:center;'>
-                    <span style='font-size:1.15rem;font-weight:800;color:rgb(128,0,0);'>
-                        💰 {r['tp']:,.0f}원
-                    </span>
-                    {sf_badge}
-                </div>
-            </div>"""
+    html += '<tr class="rc">'
+    for i, col in enumerate(columns):
+        f_cls = fc(i)
+        gname = col_to_group.get(col)
+        bar = f'<div class="gb" style="background:{group_color_map.get(gname,"")}"></div>' if gname else ''
+        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortT(this)">{bar}{col} <span class="sa">▲▼</span></th>'
+    html += '<th data-col="-1" style="min-width:50px;cursor:default">복사</th></tr></thead><tbody>'
 
-            col_info, col_msg, col_btn = st.columns([2, 4, 2], gap="medium")
-            with col_info:
-                st.markdown(info_html, unsafe_allow_html=True)
-            with col_msg:
-                st.text_area(
-                    skey,
-                    value=st.session_state[skey],
-                    key=skey,
-                    height=210,
-                    label_visibility="hidden",
-                    disabled=r['achieved']
-                )
-            with col_btn:
-                if r['achieved']:
-                    st.markdown(
-                        "<div style='display:flex;align-items:center;justify-content:center;"
-                        "height:210px;font-size:1.5rem;font-weight:800;color:#2e7d32;"
-                        "text-align:center;'>🏆<br>달성!</div>",
-                        unsafe_allow_html=True
-                    )
-                else:
-                    render_kakao_send_btn(skey, r['aname'], f"d{r['idx']}", height=225)
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        html += '<tr>'
+        for i, col in enumerate(columns):
+            val = row[col]
+            cv = "" if pd.isna(val) else str(val)
+            f_cls = fc(i)
+            extra = " sc" if col in shortfall_cols and cv else ""
+            html += f'<td class="{f_cls}{extra}" data-col="{i}">{cv}</td>'
+        html += f'<td data-col="-1"><button class="dcopy" onclick="copyC({row_idx},this,event)">📋</button>'
+        if row_idx in prize_data_map:
+            html += f'<button class="dcopy" onclick="showP({row_idx},event)" style="margin-left:2px">💰</button>'
+        html += '</td></tr>'
+    html += '</tbody></table></div></div>'
 
-            st.markdown("<hr style='margin:6px 0 10px;opacity:0.1;'>", unsafe_allow_html=True)
+    # ── 모바일 카드 뷰 ──
+    html += '<div class="mv">'
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        name_val = str(row.get('설계사명', '')) if '설계사명' in columns else ''
+        agency_val = str(row.get('지사', '')) if '지사' in columns else ''
+        num_val = str(row.get('순번', row_idx + 1)) if '순번' in columns else str(row_idx + 1)
 
-    else:
-        for r in rows:
-            skey = f"cmsg_{r['idx']}"
-            if r['achieved']:
-                sf_badge  = "<span style='color:#2e7d32;font-weight:800;font-size:1.05rem;'>🏆 달성!</span>"
-                card_border = "border:2px solid #81c995;background:#f0faf4;"
-            else:
-                sf_badge  = (f"<span class='contact-shortfall'>⚠️ {r['bsf']:,.0f}원 부족</span>") \
-                             if r['bsf'] > 0 else \
-                             "<span style='color:#2e7d32;font-weight:700;'>✅ 달성 완료</span>"
-                card_border = ""
+        # 요약 배지
+        badges = []
+        total_col_val = str(row.get('총 시상금', '')).strip()
+        if total_col_val and total_col_val != '0' and total_col_val != '':
+            badges.append(f'<span style="background:#fff3e0;color:#d9232e;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">💰{total_col_val}</span>')
+        for c in columns:
+            if '부족' in c:
+                v = str(row[c]).strip()
+                if v and v != '' and v != '0':
+                    badges.append(f'<span style="background:#FFF5F5;color:rgb(128,0,0);padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700">🔴 {c}: {v}</span>')
 
-            card_html = f"""
-            <div class='contact-card' style='{card_border}'>
-                <div style='display:flex;justify-content:space-between;
-                            align-items:flex-start;margin-bottom:8px;'>
-                    <div>
-                        <div class='contact-name'>👤 {r['aname']} 팀장님</div>
-                        <div class='contact-org'>📍 {r['agency'] if r['agency'] else '—'}</div>
-                    </div>
-                    <div class='contact-prize-total'>💰 {r['tp']:,.0f}원</div>
-                </div>
-                <div style='display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;'>
-                    <div style='flex:1;min-width:120px;background:#fff8f8;
-                                border-radius:10px;padding:8px 10px;'>
-                        <div style='font-size:0.85rem;color:#8b95a1;'>브릿지 시상금</div>
-                        <div style='font-size:1.15rem;font-weight:800;
-                                    color:rgb(128,0,0);'>{r['bp']:,.0f}원</div>
-                        <div style='font-size:0.8rem;color:#aaa;'>2월 실적 {r['br2']:,.0f}원</div>
-                    </div>
-                    <div style='flex:1;min-width:120px;background:#f8f8ff;
-                                border-radius:10px;padding:8px 10px;'>
-                        <div style='font-size:0.85rem;color:#8b95a1;'>연속가동 시상금</div>
-                        <div style='font-size:1.15rem;font-weight:800;
-                                    color:#1e3c72;'>{r['cp']:,.0f}원</div>
-                        <div style='font-size:0.8rem;color:#aaa;'>2월 실적 {r['cr2']:,.0f}원</div>
-                    </div>
-                </div>
-                <div style='display:flex;justify-content:space-between;
-                            align-items:center;padding:6px 0 2px;'>
-                    <span style='color:#8b95a1;font-size:0.9rem;'>
-                        3월 현재: {r['br3']:,.0f}원
-                    </span>
-                    {sf_badge}
-                </div>
-            </div>"""
-            st.markdown(card_html, unsafe_allow_html=True)
+        html += f'<div class="mc"><div class="mh" onclick="this.parentElement.classList.toggle(\'open\')">'
+        html += f'<span class="mn">{num_val}</span><span class="mname">{name_val}</span>'
+        if badges:
+            html += f'<span class="ms">{" ".join(badges)}</span>'
+        html += '<span class="chev">&#9660;</span></div><div class="mb">'
 
-            if r['achieved']:
-                st.text_area(
-                    f"({r['aname']})",
-                    value=st.session_state[skey],
-                    key=skey,
-                    height=68,
-                    disabled=True,
-                    label_visibility="collapsed"
-                )
-            else:
-                st.text_area(
-                    skey,
-                    value=st.session_state[skey],
-                    key=skey,
-                    height=260,
-                    label_visibility="hidden"
-                )
-                render_kakao_send_btn(skey, r['aname'], f"m{r['idx']}", height=80)
-            st.markdown("<hr style='margin:12px 0;opacity:0.12;'>", unsafe_allow_html=True)
+        # 복사 버튼
+        html += f'<div style="padding:10px 14px 6px;text-align:center"><button class="mcopy" onclick="copyC({row_idx},this,event)">📋 카톡 보내기</button>'
+        if row_idx in prize_data_map:
+            html += f'<button class="mcopy" onclick="showP({row_idx},event)" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px">💰 시상금 상세</button>'
+        html += '</div>'
+
+        # 카드 본문
+        if agency_val and agency_val != '0':
+            html += f'<div class="mr"><span class="ml">지사</span><span class="mval">{agency_val}</span></div>'
+
+        current_grp = None
+        for c in columns:
+            if c in ('순번', '지사', '설계사명'): continue
+            v = str(row[c]).strip() if not pd.isna(row[c]) else ''
+            if not v or v == '0': continue
+            grp = col_to_group.get(c)
+            if grp and grp != current_grp:
+                gc = group_color_map.get(grp, '#4e5968')
+                html += f'<div class="mgl" style="border-left:3px solid {gc};padding-left:8px">{grp}</div>'
+                current_grp = grp
+            elif grp is None and current_grp is not None:
+                current_grp = None
+            extra = ' msc' if c in shortfall_cols else ''
+            html += f'<div class="mr{extra}"><span class="ml">{c}</span><span class="mval">{v}</span></div>'
+
+        # 시상 카드 (모바일)
+        if row_idx in prize_data_map:
+            details = prize_data_map[row_idx]
+            h_prize = '<div style="margin-top:8px;padding:10px;background:#fff8f0;border-radius:10px;border:1px solid #ffd4a8;">'
+            h_prize += f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:4px">💰 총 시상금: {details["total"]:,.0f}원</div>'
+            # 간략 합계
+            parts = []
+            if details['base_prize'] > 0: parts.append(f"기본 {details['base_prize']:,.0f}")
+            if details['extra_prize'] > 0: parts.append(f"추가 {details['extra_prize']:,.0f}")
+            if details.get('bridge') and details['bridge']['prize'] > 0: parts.append(f"브릿지 {details['bridge']['prize']:,.0f}")
+            if details.get('consecutive') and details['consecutive']['prize'] > 0: parts.append(f"연속 {details['consecutive']['prize']:,.0f}")
+            if parts:
+                h_prize += f'<div style="font-size:11px;color:#888;margin-bottom:6px">({" + ".join(parts)})</div>'
+            h_prize += '</div>'
+            html += h_prize
+
+        html += '</div></div>'
+    html += '</div>'
+
+    # ── 팝업 오버레이 ──
+    html += """
+<div id="co" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:99999;justify-content:center;align-items:center;padding:20px" onclick="if(event.target===this)this.style.display='none'">
+<div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:500px;max-height:70vh;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+<h3 style="margin:0 0 10px;font-size:16px">📋 아래 텍스트를 복사하세요</h3>
+<textarea id="cta" style="width:100%;height:200px;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:14px;resize:none;font-family:inherit;box-sizing:border-box"></textarea>
+<button id="ccb" onclick="doCopy()" style="margin-top:10px;width:100%;padding:12px;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;background:#FEE500;color:#3C1E1E">📋 복사하기</button>
+<button onclick="document.getElementById('co').style.display='none'" style="margin-top:6px;width:100%;padding:12px;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;background:#f2f4f6;color:#333">닫기</button>
+</div></div>
+<div id="po" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:99999;justify-content:center;align-items:center;padding:20px" onclick="if(event.target===this)this.style.display='none'">
+<div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:450px;max-height:70vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+<h3 style="margin:0 0 12px;font-size:17px">💰 시상금 상세 조회</h3>
+<div id="pc"></div>
+<button onclick="document.getElementById('po').style.display='none'" style="margin-top:12px;width:100%;padding:12px;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;background:#f2f4f6;color:#333">닫기</button>
+</div></div>
+"""
+
+    html += f'<div id="__cb" style="display:none">{clip_b64}</div>'
+    html += f'<div id="__pb" style="display:none">{prize_b64}</div>'
+
+    html += f"""
+<script>
+var FC={freeze_count},cd=[],ph=[],ok=false;
+function isMob(){{return window.innerWidth<=768}}
+function _ld(){{try{{var c=document.getElementById('__cb'),p=document.getElementById('__pb');if(!c||!p)return;cd=JSON.parse(_d(c.textContent.trim()));ph=JSON.parse(_d(p.textContent.trim()));ok=true}}catch(e){{console.error(e)}}}}
+function _d(b){{try{{var bin=atob(b),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return new TextDecoder('utf-8').decode(u)}}catch(e){{return decodeURIComponent(escape(atob(b)))}}}}
+function copyC(i,btn,e){{e.stopPropagation();if(!ok){{alert('데이터를 불러오지 못했습니다.');return}}var t=cd[i];if(!t){{alert('복사할 내용이 없습니다.');return}}if(isMob()&&navigator.share){{navigator.share({{text:t}}).then(function(){{_fb(btn)}}).catch(function(){{_so(t)}});return}}_so(t)}}
+function _so(t){{var o=document.getElementById('co'),ta=document.getElementById('cta');ta.value=t;o.style.display='flex';setTimeout(function(){{ta.focus();ta.select();ta.setSelectionRange(0,ta.value.length)}},100)}}
+function doCopy(){{var ta=document.getElementById('cta'),t=ta.value;if(navigator.clipboard&&navigator.clipboard.writeText){{navigator.clipboard.writeText(t).then(function(){{_od(true)}}).catch(function(){{_tc(ta)}});return}}_tc(ta)}}
+function _tc(ta){{ta.readOnly=false;ta.focus();ta.select();ta.setSelectionRange(0,ta.value.length);var r=false;try{{r=document.execCommand('copy')}}catch(e){{}}if(r)_od(true);else{{_od(false);ta.focus();ta.select()}}}}
+function _od(r){{var b=document.getElementById('ccb');if(r){{b.textContent='✅ 복사 완료!';b.style.background='#22C55E';b.style.color='#fff';setTimeout(function(){{document.getElementById('co').style.display='none';b.textContent='📋 복사하기';b.style.background='#FEE500';b.style.color='#3C1E1E'}},1200)}}else{{b.textContent='⚠️ Ctrl+C로 복사하세요';b.style.background='#f59e0b';b.style.color='#fff'}}}}
+function _fb(b){{var o=b.innerHTML;b.classList.add('copied');b.innerHTML='✅ 복사 완료!';setTimeout(function(){{b.classList.remove('copied');b.innerHTML=o}},1500)}}
+function showP(i,e){{if(e)e.stopPropagation();if(!ok){{alert('데이터를 불러오지 못했습니다.');return}}var h=ph[i];if(!h){{alert('시상금 데이터가 없습니다.');return}}document.getElementById('pc').innerHTML=h;document.getElementById('po').style.display='flex'}}
+function applyF(){{var t=document.getElementById("{table_id}");var fc=isMob()?Math.min(FC,2):FC;if(!t||fc===0)return;var fr=t.querySelector("tbody tr");if(!fr)return;var lp=[],cl=0;for(var i=0;i<fc;i++){{lp.push(cl);if(fr.cells[i])cl+=fr.cells[i].offsetWidth}}t.querySelectorAll(".cf").forEach(function(c){{var idx=parseInt(c.getAttribute("data-col"));if(!isNaN(idx)&&idx<fc){{c.style.left=lp[idx]+"px";c.style.position="sticky";c.style.zIndex=c.tagName==="TH"?"3":"1"}}else if(!isNaN(idx)&&idx>=fc){{c.style.position="static";c.style.boxShadow="none"}}}})}}
+function autoR(){{if(!window.frameElement)return;var vh=window.parent.innerHeight||900;if(isMob()){{var mv=document.querySelector('.mv');if(mv)window.frameElement.style.height=Math.min(mv.scrollHeight+20,Math.round(vh*.80))+"px"}}else{{var w=document.getElementById("wrap_{table_id}");if(w)window.frameElement.style.height=Math.min(w.scrollHeight+4,Math.round(vh*.85))+"px"}}}}
+var ss={{}};
+function sortT(th){{var t=document.getElementById("{table_id}"),tb=t.querySelector("tbody"),rows=Array.from(tb.querySelectorAll("tr"));var ci=parseInt(th.getAttribute("data-col"));if(isNaN(ci))return;var asc=ss[ci]!==true;ss={{}};ss[ci]=asc;rows.sort(function(a,b){{var aT=(a.cells[ci]?a.cells[ci].textContent:'').trim(),bT=(b.cells[ci]?b.cells[ci].textContent:'').trim();var aN=parseFloat(aT.replace(/,/g,"")),bN=parseFloat(bT.replace(/,/g,""));if(aT===""&&bT==="")return 0;if(aT==="")return 1;if(bT==="")return -1;if(!isNaN(aN)&&!isNaN(bN))return asc?aN-bN:bN-aN;return asc?aT.localeCompare(bT,'ko'):bT.localeCompare(aT,'ko')}});rows.forEach(function(r){{tb.appendChild(r)}});var allR=tb.querySelectorAll("tr");allR.forEach(function(r,i){{if(r.cells[0])r.cells[0].textContent=i+1}});t.querySelectorAll("thead th").forEach(function(h){{var ar=h.querySelector(".sa");if(!ar)return;var hi=parseInt(h.getAttribute("data-col"));if(hi===ci){{ar.textContent=asc?"▲":"▼";ar.className="sa active"}}else{{ar.textContent="▲▼";ar.className="sa"}}}});setTimeout(autoR,50)}}
+window.addEventListener('load',function(){{_ld();applyF();autoR()}});
+window.addEventListener('resize',function(){{applyF();autoR()}});
+</script>"""
+    return html
 
 
-# ==========================================
-# 🔄 순서 변경 헬퍼 함수
-# ==========================================
-def _swap_config(idx_a, idx_b):
-    cfg = st.session_state['config']
-    cfg[idx_a], cfg[idx_b] = cfg[idx_b], cfg[idx_a]
-    st.rerun()
+# ═══════════════════════════════════════════════════════
+# 8. 메인 앱
+# ═══════════════════════════════════════════════════════
+def main():
+    settings = load_settings()
 
+    # 사이드바
+    st.sidebar.title("메뉴")
+    menu = st.sidebar.radio("이동", ["매니저 화면 (로그인)", "관리자 화면 (상태)"])
 
-# ==========================================
-# 📱 메뉴 (4개)
-# ==========================================
-mode = st.radio(
-    "화면 선택",
-    ["📊 내 실적 조회", "👥 매니저 관리", "📞 오늘 접촉 대상", "⚙️ 시스템 관리자"],
-    horizontal=True,
-    label_visibility="collapsed"
-)
+    # 데이터 로드
+    sum_path, bridge_path, data_date = find_latest_files()
 
-# ==========================================
-# 📞 오늘 접촉 대상
-# ==========================================
-if mode == "📞 오늘 접촉 대상":
-    page_contact()
-
-# ==========================================
-# 👥 매니저 관리
-# ==========================================
-elif mode == "👥 매니저 관리":
-    st.markdown('<div class="title-band">매니저 소속 실적 관리</div>', unsafe_allow_html=True)
-    if 'mgr_logged_in' not in st.session_state: st.session_state.mgr_logged_in = False
-    if not st.session_state.mgr_logged_in:
-        mgr_code = st.text_input("지원매니저 사번(코드)을 입력하세요", type="password", placeholder="예: 12345")
-        if st.button("로그인", type="primary"):
-            if not mgr_code: st.warning("지원매니저 코드를 입력해주세요.")
-            else:
-                sic = safe_str(mgr_code); avc = set()
-                for ci, cfg in enumerate(st.session_state['config']):
-                    mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
-                    if mc:
-                        df = _get_merged_df(ci)
-                        if df is not None and mc in df.columns:
-                            for cv in get_clean_series(df, mc).unique():
-                                if cv: avc.add(cv)
-                if sic in avc:
-                    st.session_state.mgr_logged_in=True; st.session_state.mgr_code=sic; st.session_state.mgr_step='main'
-                    save_log("매니저", sic, "MANAGER_LOGIN"); st.rerun()
-                else:
-                    st.error(f"❌ 입력하신 코드({mgr_code})가 존재하지 않습니다.")
-                    if avc: st.warning(f"🧐 인식 코드 예시: {', '.join(list(avc)[:10])}")
-    else:
-        if st.button("🚪 로그아웃"): st.session_state.mgr_logged_in=False; st.rerun()
-        st.markdown('<br>', unsafe_allow_html=True)
-        step = st.session_state.get('mgr_step','main')
-        if step == 'main':
-            st.markdown("<h3 class='main-title'>어떤 실적을 확인하시겠습니까?</h3>", unsafe_allow_html=True)
-            c1,c2=st.columns(2)
-            with c1:
-                if st.button("📁 구간실적 관리", use_container_width=True): st.session_state.mgr_step='tiers'; st.session_state.mgr_category='구간'; st.rerun()
-            with c2:
-                if st.button("📁 브릿지실적 관리", use_container_width=True): st.session_state.mgr_step='tiers'; st.session_state.mgr_category='브릿지'; st.rerun()
-        elif step == 'tiers':
-            if st.button("⬅️ 뒤로가기"): st.session_state.mgr_step='main'; st.rerun()
-            cat=st.session_state.mgr_category; my_agents=set(); slc=st.session_state.mgr_code
-            for ci,cfg in enumerate(st.session_state['config']):
-                if cfg.get('category')=='cumulative': continue
-                mc=cfg.get('col_manager_code','') or cfg.get('col_manager',''); cc=cfg.get('col_code','')
-                if not mc or not cc: continue
-                df=_get_merged_df(ci)
-                if df is None or mc not in df.columns or cc not in df.columns: continue
-                mask=get_clean_series(df,mc)==slc
-                for ac in get_clean_series(df,cc)[mask]:
-                    if ac: my_agents.add(ac)
-            st.markdown(f"<h3 class='main-title'>📁 {cat}실적 근접자 조회 (소속: 총 {len(my_agents)}명)</h3>", unsafe_allow_html=True)
-            ranges={500000:(300000,float('inf')),300000:(200000,300000),200000:(100000,200000),100000:(0,100000)}
-            counts={k:0 for k in ranges}
-            for ac in my_agents:
-                cr2,_=calculate_agent_performance(ac); mf=set()
-                for res in cr2:
-                    if cat=="구간" and "구간" not in res['type']: continue
-                    if cat=="브릿지" and "브릿지" not in res['type']: continue
-                    val=res.get('val', res.get('val_prev', res.get('val_curr', 0.0)))
-                    if val is None: val=0.0
-                    for t,(mn,mx) in ranges.items():
-                        if mn<=val<mx: mf.add(t); break
-                for t in mf: counts[t]+=1
-            for t,(mn,mx) in ranges.items():
-                ct=counts[t]
-                if t==500000: lbl=f"📁 50만 구간 근접 및 달성 (30만 이상) - 총 {ct}명"
-                else: lbl=f"📁 {int(t//10000)}만 구간 근접자 ({int(mn//10000)}만~{int(mx//10000)}만) - 총 {ct}명"
-                if st.button(lbl, use_container_width=True, key=f"t_{t}"):
-                    st.session_state.mgr_step='list'; st.session_state.mgr_target=t
-                    st.session_state.mgr_min_v=mn; st.session_state.mgr_max_v=mx
-                    st.session_state.mgr_agents=my_agents; st.rerun()
-        elif step == 'list':
-            if st.button("⬅️ 폴더로 돌아가기"): st.session_state.mgr_step='tiers'; st.rerun()
-            cat=st.session_state.mgr_category; target=st.session_state.mgr_target
-            min_v=st.session_state.mgr_min_v; max_v=st.session_state.mgr_max_v; my_agents=st.session_state.mgr_agents
-            if target==500000: st.markdown("<h3 class='main-title'>👥 50만 구간 근접 및 달성자 명단</h3>", unsafe_allow_html=True)
-            else: st.markdown(f"<h3 class='main-title'>👥 {int(target//10000)}만 구간 근접자 명단</h3>", unsafe_allow_html=True)
-            st.info("💡 이름을 클릭하면 상세 실적을 확인하고 카톡으로 전송할 수 있습니다.")
-            near=[]
-            for code in my_agents:
-                cr2,_=calculate_agent_performance(code)
-                an="이름없음"; aa=""
-                for ci,cfg in enumerate(st.session_state['config']):
-                    if cfg.get('col_code') and cfg.get('col_name'):
-                        df=_get_merged_df(ci)
-                        if df is not None and cfg['col_code'] in df.columns:
-                            mask=get_clean_series(df,cfg['col_code'])==code; mdf=df[mask]
-                            if not mdf.empty:
-                                if cfg['col_name'] in mdf.columns: an=safe_str(mdf[cfg['col_name']].values[0])
-                                ag=cfg.get('col_agency',''); br=cfg.get('col_branch','')
-                                if ag and ag in df.columns: aa=_clean_excel_text(safe_str(mdf[ag].values[0]))
-                                elif br and br in df.columns: aa=_clean_excel_text(safe_str(mdf[br].values[0]))
-                                break
-                for res in cr2:
-                    if cat=="구간" and "구간" not in res['type']: continue
-                    if cat=="브릿지" and "브릿지" not in res['type']: continue
-                    val=res.get('val', res.get('val_prev', res.get('val_curr', 0.0)))
-                    if val is None: val=0.0
-                    if min_v<=val<max_v: near.append((code,an,aa,val)); break
-            if not near: st.info("해당 구간에 소속 설계사가 없습니다.")
-            else:
-                near.sort(key=lambda x:(x[2],x[1]))
-                for code,name,agency,val in near:
-                    if st.button(f"👤 [{agency}] {name} 설계사님 (현재 {val:,.0f}원)", use_container_width=True, key=f"btn_{code}"):
-                        st.session_state.mgr_selected_code=code; st.session_state.mgr_selected_name=f"[{agency}] {name}"
-                        st.session_state.mgr_step='detail'; st.rerun()
-        elif step == 'detail':
-            if st.button("⬅️ 명단으로 돌아가기"): st.session_state.mgr_step='list'; st.rerun()
-            code=st.session_state.mgr_selected_code; name=st.session_state.mgr_selected_name
-            st.markdown("<div class='detail-box'>", unsafe_allow_html=True)
-            st.markdown(f"<h4 class='agent-title'>👤 {name} 설계사님</h4>", unsafe_allow_html=True)
-            cr2,tp=calculate_agent_performance(code)
-            render_ui_cards(name,cr2,tp,show_share_text=True)
-            ulp=os.path.join(DATA_DIR,"leaflet.png")
-            if os.path.exists(ulp): st.image(ulp, use_container_width=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-# ==========================================
-# 🔒 시스템 관리자
-# ==========================================
-elif mode == "⚙️ 시스템 관리자":
-    st.markdown("<h2 class='admin-title'>관리자 설정</h2>", unsafe_allow_html=True)
-    admin_pw = st.text_input("관리자 비밀번호를 입력하세요", type="password")
-    try: real_pw = st.secrets["admin_password"]
-    except: real_pw = "wolf7998"
-    if admin_pw != real_pw:
-        if admin_pw: st.error("비밀번호가 일치하지 않습니다.")
+    if not sum_path:
+        st.title("📊 GA3본부 시상 관리 시스템")
+        st.error(f"❌ `{DATA_DIR}/` 폴더에 PRIZE_SUM_OUT_*.xlsx 파일이 없습니다.")
+        st.markdown("""
+        ### 📁 설정 방법
+        1. 프로젝트 루트에 `data/` 폴더를 만드세요
+        2. 아래 파일들을 넣고 GitHub에 push하세요:
+           - `PRIZE_SUM_OUT_YYYYMMDD.xlsx`
+           - `PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx`
+        3. Streamlit Cloud가 자동으로 최신 파일을 감지합니다
+        """)
         st.stop()
-    st.success("인증 성공! 변경 사항은 가장 아래 [서버에 반영하기] 버튼을 눌러야 저장됩니다.")
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE,"rb") as f:
-            st.download_button("📊 접속 로그 다운로드",data=f,file_name=f"access_log_{datetime.now().strftime('%Y%m%d')}.csv",mime="text/csv")
-    st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
 
-    # ★ 추가: [0] 기준일 설정 섹션
-    st.markdown("<h3 class='sub-title'>📅 0. 기준일 설정</h3>", unsafe_allow_html=True)
-    st.caption("실적 조회 화면 상단과 카카오톡 공유 메시지에 표시됩니다.")
-    gcfg = st.session_state.get('global_config', {})
-    current_date = gcfg.get('data_date', '')
-    new_date = st.text_input("데이터 기준일 (예: 2026.03.19)", value=current_date, key="admin_data_date")
-    if st.button("📅 기준일 저장", key="save_data_date"):
-        gcfg['data_date'] = new_date
-        st.session_state['global_config'] = gcfg
-        save_global_config(gcfg)
-        st.success(f"✅ 기준일이 '{new_date}'로 저장되었습니다.")
-    st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
-    # ★ 추가 끝
+    df_merged = load_and_merge(sum_path, bridge_path)
+    prize_struct = detect_prize_structure(df_merged, settings)
 
-    # --- [1] 파일 업로드 ---
-    st.markdown("<h3 class='sub-title'>📂 1. 실적 파일 업로드 및 관리</h3>", unsafe_allow_html=True)
-    st.info("💡 시상 항목이 여러 파일에 나뉘어 있으면 모두 업로드하세요. 브릿지 파일도 여기서 업로드하세요.")
-    uploaded_files = st.file_uploader("CSV/엑셀 파일 업로드", accept_multiple_files=True, type=['csv','xlsx'])
-    if uploaded_files:
-        nu = False
-        for file in uploaded_files:
-            if file.name not in st.session_state['raw_data']:
-                if file.name.endswith('.csv'):
-                    try: df=pd.read_csv(file)
-                    except:
-                        file.seek(0)
-                        try: df=pd.read_csv(file,sep='\t')
-                        except:
-                            file.seek(0)
-                            try: df=pd.read_csv(file,encoding='cp949')
-                            except: file.seek(0); df=pd.read_csv(file,sep='\t',encoding='cp949')
-                else: df=pd.read_excel(file)
-                df.columns=[_clean_excel_text(str(c)) for c in df.columns]
-                for col in df.select_dtypes(include='object').columns:
-                    df[col]=df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
-                st.session_state['raw_data'][file.name]=df
-                df.to_pickle(os.path.join(DATA_DIR, f"{file.name}.pkl")); nu=True
-        if nu: st.success("✅ 파일 업로드 완료."); st.rerun()
-    c1,c2=st.columns([7,3])
-    with c1: st.markdown(f"**현재 저장된 파일 ({len(st.session_state['raw_data'])}개)**")
-    with c2:
-        if st.button("🗑️ 전체 파일 삭제", use_container_width=True):
-            st.session_state['raw_data'].clear(); st.session_state['merged_data']={}
-            for f in os.listdir(DATA_DIR):
-                if f.endswith('.pkl'): os.remove(os.path.join(DATA_DIR,f))
-            st.rerun()
-    if not st.session_state['raw_data']: st.info("업로드된 파일이 없습니다.")
+    if menu == "관리자 화면 (상태)":
+        show_admin(df_merged, prize_struct, sum_path, bridge_path, data_date, settings)
     else:
-        for fn in list(st.session_state['raw_data'].keys()):
-            dfp=st.session_state['raw_data'][fn]; cc=len([c for c in dfp.columns if not c.startswith('_clean_')]); rc=len(dfp)
-            cn,cb=st.columns([8,2])
-            with cn: st.write(f"📄 {fn} ({rc}행 × {cc}열)")
-            with cb:
-                if st.button("삭제",key=f"del_file_{fn}",use_container_width=True):
-                    del st.session_state['raw_data'][fn]
-                    pp=os.path.join(DATA_DIR,f"{fn}.pkl")
-                    if os.path.exists(pp): os.remove(pp)
-                    st.rerun()
-            st.markdown("<hr style='margin:5px 0;opacity:0.1;'>", unsafe_allow_html=True)
+        show_manager(df_merged, prize_struct, data_date, settings)
 
-    file_opts = list(st.session_state['raw_data'].keys())
 
-    # --- [2] 주차/브릿지 시상 ---
+def show_admin(df, ps, sum_path, bridge_path, data_date, settings):
+    """최소 관리자 화면 — 상태 확인 + settings.json 안내"""
+    st.title("⚙️ 시스템 상태")
+
+    pw = st.text_input("🔒 관리자 비밀번호", type="password")
+    if pw != settings.get('admin_password', 'wolf7998'):
+        if pw:
+            st.error("비밀번호가 틀립니다.")
+        st.stop()
+
+    st.success("✅ 로그인 성공")
+
+    # 데이터 상태
+    st.header("📁 로드된 데이터")
+    st.markdown(f"- **SUM 파일**: `{os.path.basename(sum_path)}`")
+    st.markdown(f"- **BRIDGE 파일**: `{os.path.basename(bridge_path)}`" if bridge_path else "- **BRIDGE 파일**: 없음")
+    st.markdown(f"- **데이터 기준일**: {data_date or '감지 안됨'}")
+    st.markdown(f"- **총 행 수**: {len(df):,}명")
+
+    # 감지된 시상 구조
+    st.header("🔍 자동 감지된 시상 구조")
+
+    st.subheader("📌 주차별 시상")
+    for w, info in ps['weeks'].items():
+        with st.expander(f"{w}주차 — {len(info['prizes'])}개 항목", expanded=False):
+            st.markdown(f"**실적 컬럼**: `{info['perf_col']}`")
+            for p in info['prizes']:
+                st.markdown(f"- **{p['label']}**: 대상=`{p['elig_col']}` → 시상=`{p['prize_col']}`")
+
+    if ps['combined']:
+        st.subheader("📎 합산 주차")
+        for c in ps['combined']:
+            st.markdown(f"- **{c['label']}**: `{c['elig_col']}` → `{c['prize_col']}`")
+
+    if ps['cumulative']:
+        st.subheader("📈 월 누계")
+        st.markdown(f"- 실적: `{ps['cumulative']['perf_col']}` / 대상: `{ps['cumulative']['elig_col']}` → `{ps['cumulative']['prize_col']}`")
+
+    if ps['bridge']:
+        st.subheader("🌉 브릿지")
+        b = ps['bridge']
+        st.markdown(f"- {b['label_prev']}: `{b['prev_perf']}` / {b['label_curr']}: `{b['curr_perf']}`")
+        st.markdown(f"- 시상금: `{b['prize_col']}` / 부족액: `{b.get('shortfall_col', '없음')}`")
+
+    if ps['consecutive']:
+        st.subheader("🔗 연속가동")
+        c = ps['consecutive']
+        st.markdown(f"- {c['label_prev']}: `{c['prev_perf']}` / {c['label_curr']}: `{c['curr_perf']}`")
+        st.markdown(f"- 시상금: `{c['prize_col']}` / 부족액: `{c.get('shortfall_col', '없음')}`")
+
+    if ps['next_bridge']:
+        st.subheader("🔮 차기 브릿지")
+        nb = ps['next_bridge']
+        st.markdown(f"- {nb['label']}: `{nb['perf_col']}` / 부족: `{nb.get('shortfall_col', '없음')}`")
+
     st.divider()
-    st.markdown("<h3 class='sub-title' style='margin-top:10px;'>🏆 2. 주차/브릿지 시상 항목 관리</h3>", unsafe_allow_html=True)
-    ca,cd=st.columns(2)
-    with ca:
-        if st.button("➕ 신규 시상 추가", type="primary", use_container_width=True):
-            if not file_opts: st.error("⚠️ 먼저 파일 업로드 필요")
-            else:
-                st.session_state['config'].append({
-                    "name":f"신규 주차 시책 {len(st.session_state['config'])+1}",
-                    "desc":"","category":"weekly","type":"구간 시책",
-                    "file":file_opts[0],"col_name":"","col_code":"","col_branch":"","col_agency":"","col_manager_code":"",
-                    "col_val":"","col_val_prev":"","col_val_curr":"",
-                    "col_val_w3":"","w3_label":"3주","w4_label":"4주",
-                    "weekly_bridge_tiers":[(500000,3000000),(300000,1500000),(200000,800000),(100000,200000)],
-                    "prize_items":[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}],
-                    "curr_req":100000.0,
-                    # ★ 추가: 월초브릿지 기본값
-                    "prev_req":100000.0,
-                    "prev_label":"30~31일",
-                    "curr_label":"1~5일",
-                    # ★ 추가 끝
-                    "tiers":[(500000,300),(300000,200),(200000,200),(100000,100)]
-                }); st.rerun()
-    with cd:
-        if st.button("🗑️ 모든 시상 삭제", use_container_width=True):
-            st.session_state['config']=[c for c in st.session_state['config'] if c.get('category')!='weekly']
-            with open(os.path.join(DATA_DIR,'config.json'),'w',encoding='utf-8') as f: json.dump(st.session_state['config'],f,ensure_ascii=False,cls=NumpyEncoder)
-            st.rerun()
+    st.header("📝 설정 변경 안내")
+    st.markdown("""
+    시상 라벨이나 카톡 문구를 변경하려면 프로젝트 루트의 `settings.json`을 수정하세요:
+    ```json
+    {
+      "admin_password": "wolf7998",
+      "clip_footer": "카톡 하단 인사말...",
+      "prize_labels": {
+        "base": "인보험 기본",
+        "상품": "상품 추가",
+        "상품추가": "상품 추가2",
+        "유퍼간편": "유퍼스트"
+      }
+    }
+    ```
+    """)
 
-    weekly_cfgs=[(i,c) for i,c in enumerate(st.session_state['config']) if c.get('category','weekly')=='weekly']
-    if not weekly_cfgs: st.info("현재 설정된 주차/브릿지 시상이 없습니다.")
 
-    for seq, (i, cfg) in enumerate(weekly_cfgs):
-        if 'desc' not in cfg: cfg['desc']=""
-        st.markdown("<div class='config-box'>", unsafe_allow_html=True)
+def show_manager(df, ps, data_date, settings):
+    """매니저 화면 — 로그인 후 산하 설계사 실적 표시"""
+    manager_col = '지원매니저코드'
+    manager_name_col = '지원매니저명'
 
-        ct, cup, cdn, cdl = st.columns([6, 1, 1, 2])
-        with ct:
-            st.markdown(f"<h3 class='config-title'>📌 [{seq+1}/{len(weekly_cfgs)}] {cfg['name']}</h3>", unsafe_allow_html=True)
-        with cup:
-            if seq > 0:
-                prev_real_idx = weekly_cfgs[seq - 1][0]
-                if st.button("⬆️", key=f"up_cfg_{i}", use_container_width=True):
-                    _swap_config(i, prev_real_idx)
-            else:
-                st.write("")
-        with cdn:
-            if seq < len(weekly_cfgs) - 1:
-                next_real_idx = weekly_cfgs[seq + 1][0]
-                if st.button("⬇️", key=f"dn_cfg_{i}", use_container_width=True):
-                    _swap_config(i, next_real_idx)
-            else:
-                st.write("")
-        with cdl:
-            if st.button("삭제",key=f"del_cfg_{i}",use_container_width=True): st.session_state['config'].pop(i); st.rerun()
+    if manager_col not in df.columns:
+        st.title("👤 매니저 전용 실적 현황")
+        st.error(f"데이터에 `{manager_col}` 컬럼이 없습니다.")
+        st.stop()
 
-        cfg['name']=st.text_input("시책명",value=cfg['name'],key=f"name_{i}")
-        cfg['desc']=st.text_area("시책 설명",value=cfg.get('desc',''),key=f"desc_{i}",height=100)
+    with st.form("login_form"):
+        manager_code = st.text_input("🔑 매니저 코드를 입력하세요", type="password")
+        submit = st.form_submit_button("로그인 및 조회")
 
-        # ★ 수정: TYPE_OPTIONS에 월초브릿지 추가
-        TYPE_OPTIONS = [
-            "구간 시책",
-            "브릿지 시책 (1기간: 시상 확정)",
-            "브릿지 시책 (2기간: 당월 달성 조건)",
-            "주차브릿지 시책 (동일주차 가동)",
-            "월초브릿지 시책 (전월말 가동 + 당월초 구간)"
-        ]
-        tidx=0
-        if "1기간" in cfg['type']: tidx=1
-        elif "2기간" in cfg['type']: tidx=2
-        elif "주차브릿지" in cfg['type']: tidx=3
-        elif "월초브릿지" in cfg['type']: tidx=4
-        cfg['type']=st.radio("시책 종류",TYPE_OPTIONS,index=tidx,horizontal=True,key=f"type_{i}")
-        # ★ 수정 끝
+    if not (submit and manager_code):
+        st.title("👤 매니저 전용 실적 현황")
+        st.info("매니저 코드를 입력하고 [로그인 및 조회]를 눌러주세요.")
+        return
 
-        cfg['file']=st.selectbox("📂 기본 파일 (인적사항+실적)",file_opts,index=_get_idx(cfg.get('file',''),file_opts) if file_opts else 0,key=f"file_{i}")
-        cols=_get_cols_for_file(cfg['file'])
-        c1,c2=st.columns(2)
-        with c1:
-            st.info("💡 식별 컬럼 (기본 파일)")
-            cfg['col_name']=st.selectbox("성명",cols,index=_get_idx(cfg.get('col_name',''),cols),key=f"cname_{i}")
-            cfg['col_branch']=st.selectbox("지점명(조직)",cols,index=_get_idx(cfg.get('col_branch',''),cols),key=f"cbranch_{i}")
-            cfg['col_agency']=st.selectbox("대리점/지사명",cols,index=_get_idx(cfg.get('col_agency',''),cols),key=f"cagency_{i}")
-            cfg['col_code']=st.selectbox("설계사코드(사번)",cols,index=_get_idx(cfg.get('col_code',''),cols),key=f"ccode_{i}")
-            cfg['col_manager_code']=st.selectbox("지원매니저코드",cols,index=_get_idx(cfg.get('col_manager_code',cfg.get('col_manager','')),cols),key=f"cmgrcode_{i}")
-        with c2:
-            st.info("💡 실적 컬럼 (기본 파일)")
-            if "1기간" in cfg['type']:
-                cfg['col_val_prev']=st.selectbox("전월 실적",cols,index=_get_idx(cfg.get('col_val_prev',''),cols),key=f"cvalp_{i}")
-                cfg['col_val_curr']=st.selectbox("당월 실적",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc_{i}")
-                cfg['curr_req']=st.number_input("다음 달 필수 가동 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq1_{i}")
-                st.caption("💡 브릿지 1기간: 이번 달 구간 확보 → 다음 달 가동 시 시상 확정")
-            elif "2기간" in cfg['type']:
-                cfg['col_val_prev']=st.selectbox("전월 브릿지 실적",cols,index=_get_idx(cfg.get('col_val_prev',''),cols),key=f"cvalp2_{i}")
-                cfg['col_val_curr']=st.selectbox("당월 실적",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc2_{i}")
-            elif "주차브릿지" in cfg['type']:
-                cfg['w3_label']=st.text_input("기준 주차 라벨",value=cfg.get('w3_label','3주'),key=f"w3lbl_{i}")
-                cfg['w4_label']=st.text_input("가동 주차 라벨",value=cfg.get('w4_label','4주'),key=f"w4lbl_{i}")
-                cfg['col_val_w3']=st.selectbox(f"{cfg.get('w3_label','3주')} 실적 컬럼",cols,index=_get_idx(cfg.get('col_val_w3',''),cols),key=f"cvalw3_{i}")
-                st.caption(f"💡 {cfg.get('w3_label','3주')} 실적 기준으로 {cfg.get('w4_label','4주')} 동일 가동 시 예상 시상금을 보여줍니다")
-                st.write("📈 구간 설정 (동일 가동 기준금액, 시상금)")
-                wb_tiers = cfg.get('weekly_bridge_tiers', [(500000,3000000),(300000,1500000),(200000,800000),(100000,200000)])
-                ts = "\n".join([f"{int(t[0])},{int(t[1])}" for t in wb_tiers])
-                ti = st.text_area("엔터로 줄바꿈 (기준금액,시상금)",value=ts,height=150,key=f"wbtier_{i}")
-                try:
-                    nt = []
-                    for line in ti.strip().split('\n'):
-                        if ',' in line:
-                            p = line.split(',')
-                            nt.append((float(p[0].strip()), float(p[1].strip())))
-                    cfg['weekly_bridge_tiers'] = sorted(nt, key=lambda x: x[0], reverse=True)
-                except: st.error("형식 오류: '기준금액,시상금' 형태로 입력하세요")
-            # ★ 추가: 월초브릿지 관리자 설정 UI
-            elif "월초브릿지" in cfg['type']:
-                cfg['prev_label']=st.text_input("전월 말 기간 라벨",value=cfg.get('prev_label','30~31일'),key=f"plbl_{i}")
-                cfg['curr_label']=st.text_input("당월 초 기간 라벨",value=cfg.get('curr_label','1~5일'),key=f"clbl_{i}")
-                cfg['col_val_prev']=st.selectbox(f"{cfg.get('prev_label','30~31일')} 실적 컬럼",cols,index=_get_idx(cfg.get('col_val_prev',''),cols),key=f"cvalp_mb_{i}")
-                cfg['col_val_curr']=st.selectbox(f"{cfg.get('curr_label','1~5일')} 실적 컬럼",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc_mb_{i}")
-                cfg['prev_req']=st.number_input(f"{cfg.get('prev_label','30~31일')} 필수 가동 금액",value=float(cfg.get('prev_req',100000.0)),step=10000.0,key=f"preq_mb_{i}")
-                st.caption(f"💡 {cfg.get('prev_label','30~31일')}에 {int(float(cfg.get('prev_req',100000))//10000)}만 가동 후, {cfg.get('curr_label','1~5일')} 실적에 따라 구간별 지급률 적용")
-                st.write(f"📈 {cfg.get('curr_label','1~5일')} 구간 설정 (달성금액,지급률%)")
-                default_tiers = cfg.get('tiers', [(300000,200),(200000,150),(100000,100)])
-                ts = "\n".join([f"{int(t[0])},{int(t[1])}" for t in default_tiers])
-                ti = st.text_area("엔터로 줄바꿈 (달성금액,지급률%)",value=ts,height=120,key=f"mbtier_{i}")
-                try:
-                    nt = []
-                    for line in ti.strip().split('\n'):
-                        if ',' in line:
-                            p = line.split(',')
-                            nt.append((float(p[0].strip()), float(p[1].strip())))
-                    cfg['tiers'] = sorted(nt, key=lambda x: x[0], reverse=True)
-                except: st.error("형식 오류: '달성금액,지급률%' 형태로 입력하세요")
-                st.markdown("**💡 시상금 계산 예시:**", unsafe_allow_html=True)
-                for amt, rate in cfg.get('tiers', []):
-                    prev_req_ex = int(float(cfg.get('prev_req', 100000)) // 10000)
-                    example_prize = (float(cfg.get('prev_req', 100000)) + amt) * (rate / 100)
-                    st.caption(f"  · {cfg.get('prev_label','30~31일')} {prev_req_ex}만 + {cfg.get('curr_label','1~5일')} {int(amt//10000)}만 = {prev_req_ex+int(amt//10000)}만 × {rate:g}% = {example_prize:,.0f}원")
-            # ★ 추가 끝
-            else:
-                cfg['col_val']=st.selectbox("실적 수치",cols,index=_get_idx(cfg.get('col_val',''),cols),key=f"cval_{i}")
-            if "2기간" in cfg['type']:
-                cfg['curr_req']=st.number_input("이번 달 필수 가동 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq2_{i}")
-                st.caption("💡 브릿지 2기간: 지난 달 구간 확정 → 이번 달 가동 시 시상 확정")
-                st.write("📈 구간 설정 (달성금액,지급률%)")
-                ts="\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers',[])])
-                ti=st.text_area("엔터로 줄바꿈",value=ts,height=150,key=f"tier_{i}")
-                try:
-                    nt=[]
-                    for line in ti.strip().split('\n'):
-                        if ',' in line: p=line.split(','); nt.append((float(p[0].strip()),float(p[1].strip())))
-                    cfg['tiers']=sorted(nt,key=lambda x:x[0],reverse=True)
-                except: st.error("형식 오류")
-            if "2기간" not in cfg['type'] and "주차브릿지" not in cfg['type'] and "월초브릿지" not in cfg['type']:
-                st.markdown("**💰 시상금 항목** <small style='color:#8b95a1;'>— 항목별로 다른 파일 선택 가능</small>", unsafe_allow_html=True)
-                if 'prize_items' not in cfg:
-                    old_col=cfg.pop('col_prize','') or cfg.pop('col','')
-                    cfg['prize_items']=[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":old_col}] if old_col else [{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}]
-                for _pi in cfg.get('prize_items',[]):
-                    if 'col' in _pi and 'col_prize' not in _pi: _pi['col_prize']=_pi.pop('col','')
-                    if 'col_eligible' not in _pi: _pi['col_eligible']=''
-                    if 'file' not in _pi: _pi['file']=''
-                    if 'col_code_ext' not in _pi: _pi['col_code_ext']=''
-                fowds=["(기본 파일과 동일)"]+file_opts
-                updated=[]
-                for pi_idx,pi in enumerate(cfg.get('prize_items',[])):
-                    st.markdown("<div style='background:#f8f9fa;padding:8px 10px;border-radius:8px;margin:6px 0;border:1px solid #e5e8eb;'>", unsafe_allow_html=True)
-                    pc1,pc4=st.columns([8,2])
-                    with pc1: pi['label']=st.text_input("시상명",value=pi.get('label',''),key=f"pilbl_{i}_{pi_idx}")
-                    with pc4:
-                        if st.button("🗑️",key=f"pidel_{i}_{pi_idx}",use_container_width=True):
-                            st.markdown("</div>",unsafe_allow_html=True); continue
-                    cpf=pi.get('file','') or ''
-                    pfi=fowds.index(cpf) if cpf in fowds else 0
-                    spf=st.selectbox("📂 출처 파일",fowds,index=pfi,key=f"pifile_{i}_{pi_idx}")
-                    pi['file']='' if spf=="(기본 파일과 동일)" else spf
-                    apf=pi['file'] if pi['file'] else cfg['file']
-                    pcols=_get_cols_for_file(apf); pcols_b=["(공란)"]+pcols
-                    if pi['file'] and pi['file']!=cfg['file']:
-                        pi['col_code_ext']=st.selectbox("🔗 이 파일의 사번(코드) 컬럼",pcols,index=_get_idx(pi.get('col_code_ext',''),pcols),key=f"picext_{i}_{pi_idx}")
-                    else: pi['col_code_ext']=''
-                    p2,p3=st.columns(2)
-                    with p2:
-                        ce=pi.get('col_eligible','')
-                        se=st.selectbox("지급률 컬럼 (0=미대상)",pcols_b,index=pcols_b.index(ce) if ce in pcols_b else 0,key=f"pielig_{i}_{pi_idx}")
-                        pi['col_eligible']=se if se!="(공란)" else ""
-                    with p3:
-                        cp=pi.get('col_prize','')
-                        sp=st.selectbox("예정시상금 컬럼",pcols_b,index=pcols_b.index(cp) if cp in pcols_b else 0,key=f"piprz_{i}_{pi_idx}")
-                        pi['col_prize']=sp if sp!="(공란)" else ""
-                    st.markdown("</div>",unsafe_allow_html=True)
-                    updated.append(pi)
-                cfg['prize_items']=updated
-                if st.button("➕ 시상금 항목 추가",key=f"piadd_{i}",use_container_width=True):
-                    cfg['prize_items'].append({"label":f"시상금{len(cfg['prize_items'])+1}","file":"","col_code_ext":"","col_eligible":"","col_prize":""}); st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+    code_clean = clean_key(manager_code)
+    df['_mgr_key'] = df[manager_col].apply(clean_key)
+    my_df = df[df['_mgr_key'] == code_clean].copy()
 
-    # --- [3] 누계 ---
-    st.divider()
-    st.markdown("<h3 class='blue-title'>📈 3. 월간 누계 시상 항목 관리</h3>", unsafe_allow_html=True)
-    if st.button("➕ 신규 누계 항목 추가",type="primary",use_container_width=True,key="add_cumul"):
-        if not file_opts: st.error("⚠️ 먼저 파일 업로드 필요")
-        else:
-            st.session_state['config'].append({
-                "name":f"신규 누계 항목 {len(st.session_state['config'])+1}",
-                "desc":"","category":"cumulative","type":"누계",
-                "file":file_opts[0],"col_code":"","col_val":"",
-                "prize_items":[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}]
-            }); st.rerun()
+    if my_df.empty:
+        # 부분 매칭 시도
+        mask = df['_mgr_key'].str.contains(code_clean, na=False)
+        my_df = df[mask].copy()
 
-    cumul_cfgs=[(i,c) for i,c in enumerate(st.session_state['config']) if c.get('category')=='cumulative']
-    if not cumul_cfgs: st.info("현재 설정된 누계 항목이 없습니다.")
+    if my_df.empty:
+        st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터가 없습니다.")
+        return
 
-    for seq, (i, cfg) in enumerate(cumul_cfgs):
-        st.markdown("<div class='config-box-blue'>", unsafe_allow_html=True)
+    # 매니저 이름
+    manager_name = "매니저"
+    if manager_name_col in my_df.columns:
+        names = my_df[manager_name_col].dropna()
+        if not names.empty:
+            manager_name = str(names.iloc[0])
 
-        ct, cup, cdn, cdl = st.columns([6, 1, 1, 2])
-        with ct:
-            st.markdown(f"<h3 class='config-title' style='color:#1e3c72;'>📘 [{seq+1}/{len(cumul_cfgs)}] {cfg['name']}</h3>", unsafe_allow_html=True)
-        with cup:
-            if seq > 0:
-                prev_real_idx = cumul_cfgs[seq - 1][0]
-                if st.button("⬆️", key=f"cup_cfg_{i}", use_container_width=True):
-                    _swap_config(i, prev_real_idx)
-            else:
-                st.write("")
-        with cdn:
-            if seq < len(cumul_cfgs) - 1:
-                next_real_idx = cumul_cfgs[seq + 1][0]
-                if st.button("⬇️", key=f"cdn_cfg_{i}", use_container_width=True):
-                    _swap_config(i, next_real_idx)
-            else:
-                st.write("")
-        with cdl:
-            if st.button("삭제",key=f"del_cfg_{i}",use_container_width=True): st.session_state['config'].pop(i); st.rerun()
+    # 정렬 (지사 → 설계사명)
+    sort_cols = []
+    if '대리점지사명' in my_df.columns: sort_cols.append('대리점지사명')
+    if '대리점설계사명' in my_df.columns: sort_cols.append('대리점설계사명')
+    if sort_cols:
+        my_df = my_df.sort_values(by=sort_cols)
 
-        cfg['name']=st.text_input("누계 항목명",value=cfg['name'],key=f"name_{i}")
-        cfg['file']=st.selectbox("📂 기본 파일",file_opts,index=_get_idx(cfg.get('file',''),file_opts) if file_opts else 0,key=f"file_{i}")
-        cols=_get_cols_for_file(cfg['file'])
-        c1,c2=st.columns(2)
-        with c1:
-            cfg['col_code']=st.selectbox("설계사코드(사번)",cols,index=_get_idx(cfg.get('col_code',''),cols),key=f"ccode_{i}")
-            cfg['col_val']=st.selectbox("누계 실적 컬럼",cols,index=_get_idx(cfg.get('col_val',''),cols),key=f"cval_{i}")
-        with c2:
-            st.markdown("**💰 시상금 항목** <small style='color:#8b95a1;'>— 항목별 파일 선택 가능</small>", unsafe_allow_html=True)
-            if 'prize_items' not in cfg:
-                old_col=cfg.pop('col_prize','')
-                cfg['prize_items']=[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":old_col}] if old_col else [{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}]
-            for _pi in cfg.get('prize_items',[]):
-                if 'col' in _pi and 'col_prize' not in _pi: _pi['col_prize']=_pi.pop('col','')
-                if 'col_eligible' not in _pi: _pi['col_eligible']=''
-                if 'file' not in _pi: _pi['file']=''
-                if 'col_code_ext' not in _pi: _pi['col_code_ext']=''
-            fowds=["(기본 파일과 동일)"]+file_opts
-            updated=[]
-            for pi_idx,pi in enumerate(cfg.get('prize_items',[])):
-                st.markdown("<div style='background:#f0f4ff;padding:8px 10px;border-radius:8px;margin:6px 0;border:1px solid #c7d2fe;'>", unsafe_allow_html=True)
-                pc1,pc4=st.columns([8,2])
-                with pc1: pi['label']=st.text_input("시상명",value=pi.get('label',''),key=f"cpilbl_{i}_{pi_idx}")
-                with pc4:
-                    if st.button("🗑️",key=f"cpidel_{i}_{pi_idx}",use_container_width=True):
-                        st.markdown("</div>",unsafe_allow_html=True); continue
-                cpf=pi.get('file','') or ''
-                pfi=fowds.index(cpf) if cpf in fowds else 0
-                spf=st.selectbox("📂 출처 파일",fowds,index=pfi,key=f"cpifile_{i}_{pi_idx}")
-                pi['file']='' if spf=="(기본 파일과 동일)" else spf
-                apf=pi['file'] if pi['file'] else cfg['file']
-                pcols=_get_cols_for_file(apf); pcols_b=["(공란)"]+pcols
-                if pi['file'] and pi['file']!=cfg['file']:
-                    pi['col_code_ext']=st.selectbox("🔗 이 파일의 사번(코드) 컬럼",pcols,index=_get_idx(pi.get('col_code_ext',''),pcols),key=f"cpicext_{i}_{pi_idx}")
-                else: pi['col_code_ext']=''
-                p2,p3=st.columns(2)
-                with p2:
-                    ce=pi.get('col_eligible','')
-                    se=st.selectbox("지급률 컬럼 (0=미대상)",pcols_b,index=pcols_b.index(ce) if ce in pcols_b else 0,key=f"cpielig_{i}_{pi_idx}")
-                    pi['col_eligible']=se if se!="(공란)" else ""
-                with p3:
-                    cp=pi.get('col_prize','')
-                    sp=st.selectbox("예정시상금 컬럼",pcols_b,index=pcols_b.index(cp) if cp in pcols_b else 0,key=f"cpiprz_{i}_{pi_idx}")
-                    pi['col_prize']=sp if sp!="(공란)" else ""
-                st.markdown("</div>",unsafe_allow_html=True)
-                updated.append(pi)
-            cfg['prize_items']=updated
-            if st.button("➕ 시상금 항목 추가",key=f"cpiadd_{i}",use_container_width=True):
-                cfg['prize_items'].append({"label":f"시상금{len(cfg['prize_items'])+1}","file":"","col_code_ext":"","col_eligible":"","col_prize":""}); st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+    # 표시 데이터 빌드
+    display_df, col_groups, prize_data_map = build_display(my_df, ps, settings)
 
-    # --- [4] 리플렛 ---
-    st.divider()
-    st.markdown("<h3 class='sub-title' style='margin-top:10px;'>🖼️ 4. 안내 리플렛(이미지) 등록</h3>", unsafe_allow_html=True)
-    lf=st.file_uploader("리플렛 이미지 업로드",type=['jpg','jpeg','png'])
-    if lf:
-        with open(os.path.join(DATA_DIR,"leaflet.png"),"wb") as f: f.write(lf.getbuffer())
-        st.success("✅ 리플렛 저장 완료!"); st.rerun()
-    lp=os.path.join(DATA_DIR,"leaflet.png")
-    if os.path.exists(lp):
-        st.image(lp, width=250)
-        if st.button("🗑️ 리플렛 삭제"): os.remove(lp); st.rerun()
+    # 헤더
+    date_html = f"<span style='font-size:14px;color:rgba(255,255,255,0.85);float:right;margin-top:8px'>📅 {data_date}</span>" if data_date else ""
+    st.markdown(f"""
+    <div class='toss-header'>
+        {date_html}
+        <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({code_clean})</span></h1>
+        <p class='toss-desc'>산하 팀장분들의 실적·시상 현황입니다. (총 {len(display_df)}명)</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # --- [5] 백업/복원 ---
-    st.divider()
-    st.markdown("<h3 class='sub-title' style='margin-top:10px;'>💾 5. 설정 백업 및 복원</h3>", unsafe_allow_html=True)
-    cb,cr=st.columns(2)
-    with cb:
-        if st.session_state['config']:
-            st.download_button("⬇️ 설정 백업",data=json.dumps(st.session_state['config'],ensure_ascii=False,indent=2,cls=NumpyEncoder),
-                file_name=f"config_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",mime="application/json",use_container_width=True)
-        else: st.warning("백업할 설정 없음")
-    with cr:
-        rf=st.file_uploader("백업 JSON 업로드",type=['json'],key="restore_config")
-        if rf:
-            try:
-                rd=json.loads(rf.read().decode('utf-8'))
-                if isinstance(rd,list):
-                    for c in rd:
-                        if 'category' not in c: c['category']='weekly'
-                    st.success(f"✅ 확인: 주차 {sum(1 for c in rd if c.get('category')=='weekly')}개, 누계 {sum(1 for c in rd if c.get('category')=='cumulative')}개")
-                    if st.button("🔄 복원하기",type="primary",use_container_width=True,key="do_restore"):
-                        st.session_state['config']=rd
-                        with open(os.path.join(DATA_DIR,'config.json'),'w',encoding='utf-8') as f: json.dump(rd,f,ensure_ascii=False,cls=NumpyEncoder)
-                        st.session_state['merged_data']=build_merged_data(rd,st.session_state['raw_data'])
-                        save_merged_to_disk(st.session_state['merged_data'])
-                        st.success("✅ 복원 완료!"); st.rerun()
-            except Exception as e: st.error(f"❌ 오류: {e}")
+    # HTML 테이블 렌더
+    footer = settings.get('clip_footer', DEFAULT_SETTINGS['clip_footer'])
+    table_html = render_html_table(display_df, col_groups, prize_data_map, data_date, footer)
+    components.html(table_html, height=800, scrolling=False)
 
-    # --- 서버 반영 ---
-    if st.session_state['config']:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("✅ 모든 설정 완료 및 서버에 반영하기",type="primary",use_container_width=True):
-            with open(os.path.join(DATA_DIR,'config.json'),'w',encoding='utf-8') as f: json.dump(st.session_state['config'],f,ensure_ascii=False,cls=NumpyEncoder)
-            st.session_state['merged_data']=build_merged_data(st.session_state['config'],st.session_state['raw_data'])
-            save_merged_to_disk(st.session_state['merged_data'])
-            ext_cnt=sum(1 for cfg in st.session_state['config'] for pi in cfg.get('prize_items',[]) if pi.get('file') and pi['file']!=cfg.get('file',''))
-            st.success(f"✅ 서버 반영 완료! (데이터셋 {len(st.session_state['merged_data'])}개, 외부파일 항목 {ext_cnt}개 병합)")
-        cp=os.path.join(DATA_DIR,'config.json')
-        if os.path.exists(cp):
-            st.divider()
-            with open(cp,'r',encoding='utf-8') as f: cd=f.read()
-            st.download_button("📥 config.json 다운로드",data=cd,file_name="config.json",mime="application/json")
 
-# ==========================================
-# 🏆 사용자 모드
-# ==========================================
-else:
-    # ★ 수정: title-band에 기준일 표시
-    data_date = st.session_state.get('global_config', {}).get('data_date', '')
-    title_date_html = f"<br><span style='font-size:0.85rem;font-weight:600;opacity:0.85;'>📅 기준일: {data_date}</span>" if data_date else ""
-    st.markdown(f'<div class="title-band">메리츠화재 시상 현황{title_date_html}</div>', unsafe_allow_html=True)
-
-    st.markdown("<h3 class='main-title'>이름과 지점별 코드를 입력하세요.</h3>", unsafe_allow_html=True)
-    user_name=st.text_input("본인 이름",placeholder="예: 홍길동")
-    branch_code_input=st.text_input("지점별 코드",placeholder="예: 1지점은 1, 11지점은 11")
-    codes_found=set(); needs_dis=False
-    if user_name and branch_code_input:
-        for ci,cfg in enumerate(st.session_state['config']):
-            if cfg.get('category')=='cumulative': continue
-            df=_get_merged_df(ci)
-            if df is not None:
-                cn=cfg.get('col_name',''); cb=cfg.get('col_branch','')
-                sn=df[cn].fillna('').astype(str).str.strip() if cn and cn in df.columns else pd.Series()
-                if sn.empty: continue
-                nm=(sn==user_name.strip())
-                if branch_code_input.strip()=="0000": match=df[nm]
-                else:
-                    cc=branch_code_input.replace("지점","").strip()
-                    if cc:
-                        sb=df[cb].fillna('').astype(str) if cb and cb in df.columns else pd.Series()
-                        if sb.empty: continue
-                        match=df[nm & sb.str.contains(rf"(?<!\d){cc}\s*지점",regex=True)]
-                    else: match=pd.DataFrame()
-                if not match.empty and cfg.get('col_code') and cfg['col_code'] in df.columns:
-                    for ac in get_clean_series(df,cfg['col_code'])[match.index]:
-                        if ac: codes_found.add(ac)
-    codes_found={c for c in codes_found if c}
-    sel_code=None
-    if len(codes_found)>1:
-        st.warning("⚠️ 동명이인이 있습니다. 사번을 선택해주세요.")
-        sel_code=st.selectbox("사번 선택",sorted(list(codes_found))); needs_dis=True
-    if st.button("내 실적 확인하기",type="primary"):
-        if not user_name or not branch_code_input: st.warning("이름과 지점코드를 입력해주세요.")
-        elif not st.session_state['config']: st.warning("시책 데이터가 없습니다.")
-        elif not codes_found: st.error("일치하는 정보가 없습니다.")
-        else:
-            fc=sel_code if needs_dis else list(codes_found)[0]
-            cr2,tp=calculate_agent_performance(fc)
-            if cr2:
-                dn=user_name
-                for ci,cfg in enumerate(st.session_state['config']):
-                    df=_get_merged_df(ci)
-                    if df is None: continue
-                    cc=cfg.get('col_code',''); cag=cfg.get('col_agency','')
-                    if not cc or cc not in df.columns: continue
-                    if not cag or cag not in df.columns: continue
-                    m=df[get_clean_series(df,cc)==safe_str(fc)]
-                    if not m.empty:
-                        av=_clean_excel_text(str(m[cag].values[0]).strip())
-                        if av and av!='nan': dn=f"{av} {user_name}"; break
-                save_log(f"{user_name}({branch_code_input}지점)",fc,"USER_SEARCH")
-                render_ui_cards(dn,cr2,tp,show_share_text=False)
-                ulp=os.path.join(DATA_DIR,"leaflet.png")
-                if os.path.exists(ulp): st.markdown("<div style='margin-top:20px;'></div>",unsafe_allow_html=True); st.image(ulp,use_container_width=True)
-            else: st.error("해당 조건의 실적 데이터가 없습니다.")
+if __name__ == "__main__":
+    main()
