@@ -134,11 +134,12 @@ def detect_prize_structure(_cols_tuple, _labels_json):
     labels = json.loads(_labels_json)
     wp = re.compile(r'^추가13회예정금_(\d+)주대상$')
     sp = re.compile(r'^추가13회예정금_(\d+)주대상_(.+)$')
-    cp = re.compile(r'^추가13회예정금_(\d+)_(\d+)주대상$')
+    mp = re.compile(r'^추가13회예정금_(\d+)_(\d+)주대상$')  # 연속주차 (예: 1_2주)
     smap = {'상품': '상품', '상품추가': '상품추가', '유퍼': '유퍼간편'}
 
     detected = {}
     for c in sorted(cols):
+        # 기본: 추가13회예정금_{N}주대상
         m = wp.match(c)
         if m:
             w = int(m.group(1))
@@ -147,6 +148,7 @@ def detect_prize_structure(_cols_tuple, _labels_json):
                 detected.setdefault(w, []).append({
                     'label': labels.get('base', '인보험 기본'),
                     'elig': c, 'prize': pc})
+        # 서브: 추가13회예정금_{N}주대상_상품 등
         m2 = sp.match(c)
         if m2:
             w, sfx = int(m2.group(1)), m2.group(2)
@@ -156,20 +158,20 @@ def detect_prize_structure(_cols_tuple, _labels_json):
                 detected.setdefault(w, []).append({
                     'label': labels.get(ps, labels.get(sfx, sfx)),
                     'elig': c, 'prize': pc})
+        # 연속주차: 추가13회예정금_{A}_{B}주대상 → B주차 하위항목으로 편입
+        m3 = mp.match(c)
+        if m3:
+            a, b = int(m3.group(1)), int(m3.group(2))
+            pc = f'추가13회예정금_{a}_{b}주'
+            if pc in cols:
+                detected.setdefault(b, []).append({
+                    'label': f"{labels.get('base', '인보험 기본')} ({a}주)",
+                    'elig': c, 'prize': pc})
 
     weeks = {}
     for w in sorted(detected.keys()):
         pf = f'실적_{w}주차'
         weeks[w] = {'perf': pf if pf in cols else None, 'items': detected[w]}
-
-    combined = []
-    for c in sorted(cols):
-        m = cp.match(c)
-        if m:
-            a, b = m.group(1), m.group(2)
-            pc = f'추가13회예정금_{a}_{b}주'
-            if pc in cols:
-                combined.append({'label': f'{a}~{b}주 합산', 'elig': c, 'prize': pc})
 
     cumul = None
     if '추가13회예정금_월대상' in cols and '추가13회예정금계' in cols:
@@ -201,21 +203,8 @@ def detect_prize_structure(_cols_tuple, _labels_json):
             'lp': f'{pm2}월' if pm2 else '', 'lc': f'{cm2b}월' if cm2b else '',
         }
 
-    nb = None
-    for c in sorted(cols):
-        m = re.match(r'^브릿지실적_(\d+)_(\d+)월$', c)
-        if m:
-            a, b = m.group(1), m.group(2)
-            nb = {
-                'label': f'{a}~{b}월 브릿지',
-                'perf': c,
-                'shortfall': f'브릿지실적부족액_{a}_{b}월' if f'브릿지실적부족액_{a}_{b}월' in cols else None,
-                'target': f'브릿지실적목표_{a}_{b}월' if f'브릿지실적목표_{a}_{b}월' in cols else None,
-            }
-            break
-
-    return {'weeks': weeks, 'combined': combined, 'cumul': cumul,
-            'bridge': bridge, 'consec': consec, 'next_bridge': nb}
+    return {'weeks': weeks, 'cumul': cumul,
+            'bridge': bridge, 'consec': consec}
 
 
 # ═══════════════════════════════════════════════════════
@@ -250,26 +239,31 @@ def calculate_agent_performance(target_code, df, ps):
                 'prize_details': details
             })
 
-    # ── 합산 주차 ──
-    for cb in ps['combined']:
-        elig = safe_float(row.get(cb['elig'], 0))
-        if elig == 0: continue
-        amt = safe_float(row.get(cb['prize'], 0))
-        if amt > 0:
+    # ── 연속가동 (브릿지보다 먼저 표시) ──
+    if ps.get('consec'):
+        c = ps['consec']
+        cp = safe_float(row.get(c['prize'], 0))
+        vp = safe_float(row.get(c['prev'], 0)) if c['prev'] else 0
+        vc = safe_float(row.get(c['curr'], 0)) if c['curr'] else 0
+        sf = safe_float(row.get(c.get('shortfall', ''), 0)) if c.get('shortfall') else 0
+        tgt = safe_float(row.get(c.get('target', ''), 0)) if c.get('target') else 0
+        if vp > 0 or vc > 0 or cp > 0:
             results.append({
-                'name': cb['label'], 'desc': '', 'category': 'weekly',
-                'type': '구간', 'val': amt, 'prize': amt,
-                'prize_details': [{'label': cb['label'], 'amount': amt}]
+                'name': f"연속가동 시상 ({c['lp']}~{c['lc']})",
+                'desc': '', 'category': 'weekly', 'type': '연속가동 브릿지',
+                'val_prev': vp, 'val_curr': vc,
+                'prize': cp, 'shortfall': sf, 'target': tgt,
+                'label_prev': c['lp'], 'label_curr': c['lc'],
             })
 
     # ── 브릿지 ──
-    if ps['bridge']:
+    if ps.get('bridge'):
         b = ps['bridge']
         bp = safe_float(row.get(b['prize'], 0))
         vp = safe_float(row.get(b['prev'], 0)) if b['prev'] else 0
         vc = safe_float(row.get(b['curr'], 0)) if b['curr'] else 0
-        sf = safe_float(row.get(b['shortfall'], 0)) if b.get('shortfall') else 0
-        tgt = safe_float(row.get(b['target'], 0)) if b.get('target') else 0
+        sf = safe_float(row.get(b.get('shortfall', ''), 0)) if b.get('shortfall') else 0
+        tgt = safe_float(row.get(b.get('target', ''), 0)) if b.get('target') else 0
         if vp > 0 or vc > 0 or bp > 0:
             results.append({
                 'name': f"브릿지 시상 ({b['lp']}~{b['lc']})",
@@ -277,37 +271,6 @@ def calculate_agent_performance(target_code, df, ps):
                 'val_prev': vp, 'val_curr': vc,
                 'prize': bp, 'shortfall': sf, 'target': tgt,
                 'label_prev': b['lp'], 'label_curr': b['lc'],
-            })
-
-    # ── 연속가동 ──
-    if ps['consec']:
-        c = ps['consec']
-        cp = safe_float(row.get(c['prize'], 0))
-        vp = safe_float(row.get(c['prev'], 0)) if c['prev'] else 0
-        vc = safe_float(row.get(c['curr'], 0)) if c['curr'] else 0
-        sf = safe_float(row.get(c['shortfall'], 0)) if c.get('shortfall') else 0
-        tgt = safe_float(row.get(c['target'], 0)) if c.get('target') else 0
-        if vp > 0 or vc > 0 or cp > 0:
-            results.append({
-                'name': f"연속가동 ({c['lp']}~{c['lc']})",
-                'desc': '', 'category': 'weekly', 'type': '연속가동 브릿지',
-                'val_prev': vp, 'val_curr': vc,
-                'prize': cp, 'shortfall': sf, 'target': tgt,
-                'label_prev': c['lp'], 'label_curr': c['lc'],
-            })
-
-    # ── 차기 브릿지 프리뷰 ──
-    if ps['next_bridge']:
-        nb = ps['next_bridge']
-        perf_nb = safe_float(row.get(nb['perf'], 0))
-        sf_nb = safe_float(row.get(nb['shortfall'], 0)) if nb.get('shortfall') else 0
-        tgt_nb = safe_float(row.get(nb['target'], 0)) if nb.get('target') else 0
-        if perf_nb > 0 or sf_nb > 0:
-            results.append({
-                'name': f"차기 {nb['label']}", 'desc': '(진행 중)',
-                'category': 'weekly', 'type': '차기브릿지',
-                'val': perf_nb, 'shortfall': sf_nb, 'target': tgt_nb,
-                'prize': 0,
             })
 
     # ── 누계 (cumulative) ──
@@ -397,10 +360,6 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
                 cond = "(당월 가동 조건)" if r.get('shortfall', 0) > 0 else ""
                 sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{r['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>{cond}</span></span><span class='summary-item-val'>{r['prize']:,.0f}원</span></div>"
                 share += f"🔹 {r['name']}: {r['prize']:,.0f}원 {cond}\n"
-            elif r['type'] == '차기브릿지':
-                sf_txt = f"(부족: {r['shortfall']:,.0f}원)" if r.get('shortfall', 0) > 0 else "(달성)"
-                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{r['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>{sf_txt}</span></span><span class='summary-item-val'>진행중</span></div>"
-                share += f"🔹 {r['name']}: 실적 {r['val']:,.0f}원 {sf_txt}\n"
         sh += "</div>"
         st.markdown(sh, unsafe_allow_html=True)
 
@@ -440,19 +399,6 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
                 if r.get('shortfall', 0) > 0:
                     share += f"  ⚠️ 부족: {r['shortfall']:,.0f}원\n"
 
-            elif r['type'] == '차기브릿지':
-                sf_html = ""
-                if r.get('shortfall', 0) > 0:
-                    sf_html = f"<div class='shortfall-row'><div class='shortfall-text'>📈 부족금액: {r['shortfall']:,.0f}원 (목표: {r.get('target',0):,.0f}원)</div></div>"
-                ch = (
-                    f"<div class='toss-card'>"
-                    f"<div class='toss-title'>🔮 {r['name']}</div>"
-                    f"<div class='toss-desc'>{r.get('desc','')}</div>"
-                    f"<div class='data-row'><span class='data-label'>현재 실적</span><span class='data-value'>{r['val']:,.0f}원</span></div>"
-                    f"<div class='toss-divider'></div>"
-                    f"{sf_html}"
-                    f"</div>"
-                )
             else:
                 continue
 
@@ -831,11 +777,6 @@ elif mode == "⚙️ 시스템 관리자":
             for p in info['items']:
                 st.markdown(f"- **{p['label']}**: `{p['elig']}` → `{p['prize']}`")
 
-    if ps['combined']:
-        st.subheader("📎 합산 주차")
-        for c in ps['combined']:
-            st.markdown(f"- **{c['label']}**: `{c['elig']}` → `{c['prize']}`")
-
     if ps['cumul']:
         st.subheader("📈 월 누계")
         st.markdown(f"- 대상: `{ps['cumul']['elig']}` → 시상: `{ps['cumul']['prize']}`")
@@ -851,11 +792,6 @@ elif mode == "⚙️ 시스템 관리자":
         c = ps['consec']
         st.markdown(f"- {c['lp']}: `{c['prev']}` / {c['lc']}: `{c['curr']}`")
         st.markdown(f"- 시상금: `{c['prize']}` / 부족액: `{c.get('shortfall', '없음')}`")
-
-    if ps['next_bridge']:
-        st.subheader("🔮 차기 브릿지")
-        nb = ps['next_bridge']
-        st.markdown(f"- {nb['label']}: `{nb['perf']}` / 부족: `{nb.get('shortfall', '없음')}`")
 
     st.divider()
     st.markdown("""
