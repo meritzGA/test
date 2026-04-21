@@ -1,367 +1,194 @@
 """
-auto_loader.py — 데이터 자동 로더 + stage 감지 + 설정 머지
+admin_view.py — 새 관리자 뷰 (자동 로드 상태 + stage 오버라이드)
 
-[작동 순서]
-  1. data/ 폴더에서 최신 파일 3개 자동 선택 (파일명 YYYYMMDD 기준)
-  2. 3개 파일 outer merge
-  3. 병합된 컬럼 + 기준년월로 current_month & stage 자동 감지
-  4. config/base.json + config/stages/{stage}.json 로드 (JSON 없으면 .pkl 폴백)
-  5. 문자열의 {m}, {m-1} 플레이스홀더를 현재 월 숫자로 치환
-  6. base + stage 머지 → 앱 session_state에 주입할 dict 반환
-
-[파일명 규칙]
-  data/MC_LIST_OUT_YYYYMMDD.xlsx
-  data/PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx
-  data/PRIZE_SUM_OUT_YYYYMMDD.xlsx
+기존 관리자 섹션 1~9번 (파일 업로드, 표시 항목 관리, 시상금 설정 등)을
+모두 제거하고, 자동 감지된 상태를 보여주는 "읽기 전용 + 오버라이드" 화면.
 """
 import os
-import re
-import glob
-import json
 import pickle
-import pandas as pd
-from datetime import datetime
-from collections import Counter
+import streamlit as st
+import auto_loader as al
 
-# ──────────────────────────────────────────────────────────────
-# 경로 설정
-# ──────────────────────────────────────────────────────────────
-DATA_DIR = "data"
-CONFIG_DIR = "config"
-STAGES_DIR = os.path.join(CONFIG_DIR, "stages")
-
-# 파일명 패턴 (prefix, glob)
-FILE_PATTERNS = [
-    ("MC_LIST_OUT",        "MC_LIST_OUT_*.xlsx"),
-    ("PRIZE_6_BRIDGE_OUT", "PRIZE_6_BRIDGE_OUT_*.xlsx"),
-    ("PRIZE_SUM_OUT",      "PRIZE_SUM_OUT_*.xlsx"),
-]
+ADMIN_PASSWORD = "wolf7998"  # 필요 시 변경
 
 
-# ──────────────────────────────────────────────────────────────
-# 데이터 파일 스캔
-# ──────────────────────────────────────────────────────────────
-def _extract_yyyymmdd(filepath):
-    m = re.search(r"(\d{8})", os.path.basename(filepath))
-    return m.group(1) if m else "00000000"
+def _do_admin_auth():
+    """관리자 로그인 처리. 통과하지 않으면 st.stop()."""
+    if st.session_state.get('admin_authenticated', False):
+        return
+    with st.form("admin_login_form_v2"):
+        pw = st.text_input("🔒 관리자 비밀번호", type="password")
+        if st.form_submit_button("로그인"):
+            if pw == ADMIN_PASSWORD:
+                st.session_state['admin_authenticated'] = True
+                st.rerun()
+            else:
+                st.error("❌ 비밀번호가 일치하지 않습니다.")
+    st.stop()
 
 
-def find_latest_data_files():
-    """각 패턴별 최신 파일(YYYYMMDD 기준) 1개씩 반환."""
-    result = {}
-    for key, pattern in FILE_PATTERNS:
-        files = glob.glob(os.path.join(DATA_DIR, pattern))
-        if not files:
-            result[key] = None
-            continue
-        files.sort(key=_extract_yyyymmdd, reverse=True)
-        result[key] = files[0]
-    return result
-
-
-# ──────────────────────────────────────────────────────────────
-# 엑셀 로드 + 인코딩 정리 (기존 app.py 로직 재사용)
-# ──────────────────────────────────────────────────────────────
-def _decode_excel_text(val):
-    if pd.isna(val):
-        return val
-    s = str(val)
-    if "_x" not in s:
-        return s
-
-    def _sub(m):
-        try:
-            return chr(int(m.group(1), 16))
-        except Exception:
-            return m.group(0)
-
-    return re.sub(r"_x([0-9a-fA-F]{4})_", _sub, s)
-
-
-def _clean_key(val):
-    if pd.isna(val) or str(val).strip().lower() == "nan":
-        return ""
-    s = str(val).strip().replace(" ", "").upper()
-    if s.endswith(".0"):
-        s = s[:-2]
-    return s
-
-
-def _load_excel_clean(path):
-    df = pd.read_excel(path)
-    df.columns = [_decode_excel_text(c) if isinstance(c, str) else c for c in df.columns]
-    for c in df.columns:
-        if pd.api.types.is_string_dtype(df[c]):
-            df[c] = df[c].apply(_decode_excel_text)
-    return df
-
-
-# ──────────────────────────────────────────────────────────────
-# 3개 파일 outer merge (기존 app.py 병합 로직 그대로)
-# ──────────────────────────────────────────────────────────────
-def merge_three_files(f1, f2, f3, key1, key2, key3):
-    df1 = _load_excel_clean(f1)
-    df2 = _load_excel_clean(f2)
-    df3 = _load_excel_clean(f3)
-
-    df1["merge_key1"] = df1[key1].apply(_clean_key)
-    df2["merge_key2"] = df2[key2].apply(_clean_key)
-    df_merged = pd.merge(
-        df1, df2,
-        left_on="merge_key1", right_on="merge_key2",
-        how="outer", suffixes=("_파일1", "_파일2"),
-    )
-
-    # 중복 컬럼 combine_first
-    for c1 in [c for c in df_merged.columns if c.endswith("_파일1")]:
-        base = c1.replace("_파일1", "")
-        c2 = base + "_파일2"
-        if c2 in df_merged.columns:
-            df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
-            df_merged.drop(columns=[c1, c2], inplace=True)
-
-    df_merged["_unified_search_key"] = df_merged["merge_key1"].combine_first(df_merged["merge_key2"])
-
-    df3["merge_key3"] = df3[key3].apply(_clean_key)
-    df_merged = pd.merge(
-        df_merged, df3,
-        left_on="_unified_search_key", right_on="merge_key3",
-        how="outer", suffixes=("", "_파일3"),
-    )
-    for c3 in [c for c in df_merged.columns if c.endswith("_파일3")]:
-        base = c3.replace("_파일3", "")
-        if base in df_merged.columns:
-            df_merged[base] = df_merged[base].combine_first(df_merged[c3])
-            df_merged.drop(columns=[c3], inplace=True)
-        else:
-            df_merged.rename(columns={c3: base}, inplace=True)
-
-    if "merge_key3" in df_merged.columns:
-        df_merged["_unified_search_key"] = df_merged["_unified_search_key"].combine_first(df_merged["merge_key3"])
-
-    return df_merged
-
-
-# ──────────────────────────────────────────────────────────────
-# 현재 월 감지 (기준년월 최빈값)
-# ──────────────────────────────────────────────────────────────
-def detect_current_month(df):
-    if "기준년월" in df.columns:
-        vals = df["기준년월"].dropna().astype(str)
-        months = []
-        for v in vals:
-            v_clean = v.replace(".", "").replace("-", "").strip()
-            if v_clean.endswith(".0"):
-                v_clean = v_clean[:-2]
-            if len(v_clean) >= 6:  # YYYYMM...
-                try:
-                    months.append(int(v_clean[4:6]))
-                except Exception:
-                    pass
-            elif 1 <= len(v_clean) <= 2:
-                try:
-                    months.append(int(v_clean))
-                except Exception:
-                    pass
-        if months:
-            return Counter(months).most_common(1)[0][0]
-    return datetime.now().month
-
-
-# ──────────────────────────────────────────────────────────────
-# stage 자동 감지 — "어느 주차까지 실적이 찍혔는지" 기준 (1~6주차 일반화)
-# ──────────────────────────────────────────────────────────────
-MAX_WEEK_SUPPORTED = 6  # 필요 시 7, 8도 확장 가능. config/stages/stage_N_weekN.json 있어야 함.
-
-
-def detect_stage(df):
-    cols = set(df.columns)
-    has_monthly_연속 = any(re.match(r"^연속가동실적_\d+월$", c) for c in cols)
-
-    # 컬럼이 있어도 값이 전부 0이면 "아직 집계 전" — 상위 stage로 안 올라감
-    def _has_value(col):
-        if col not in df.columns:
-            return False
-        try:
-            num = pd.to_numeric(
-                df[col].astype(str).str.replace(",", "", regex=False),
-                errors="coerce",
-            ).fillna(0)
-            return (num != 0).any()
-        except Exception:
-            return False
-
-    # 값이 실제로 찍힌 가장 높은 주차 찾기 (2주차 이상부터 체크 — 1주차는 base)
-    max_week_with_value = 0
-    for n in range(2, MAX_WEEK_SUPPORTED + 1):
-        col = f"실적_{n}주차"
-        if col in cols and _has_value(col):
-            max_week_with_value = n
-
-    if max_week_with_value >= 2:
-        return f"stage_{max_week_with_value}_week{max_week_with_value}"
-
-    # 아직 2주차 값이 없으면 1주차 단계
-    if "실적_1주차" in cols or has_monthly_연속:
-        return "stage_1_week1_early"
-    return "stage_1_week1_early"
-
-
-# ──────────────────────────────────────────────────────────────
-# 플레이스홀더 치환 ({m} → current_month, {m-1} → prev_month)
-# ──────────────────────────────────────────────────────────────
-def substitute_placeholders(obj, current_month):
-    prev_m = current_month - 1 if current_month > 1 else 12
-    if isinstance(obj, dict):
-        return {k: substitute_placeholders(v, current_month) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [substitute_placeholders(v, current_month) for v in obj]
-    if isinstance(obj, str):
-        # {m-1} 먼저 (m을 포함하므로)
-        return obj.replace("{m-1}", str(prev_m)).replace("{m}", str(current_month))
-    return obj
-
-
-# ──────────────────────────────────────────────────────────────
-# JSON 우선, PKL 폴백 로더
-# ──────────────────────────────────────────────────────────────
-def _load_json_or_pkl(json_path, pkl_path):
-    if os.path.exists(json_path):
-        with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    if os.path.exists(pkl_path):
-        with open(pkl_path, "rb") as f:
-            return pickle.load(f)
-    return None
-
-
-def load_base_config():
-    return _load_json_or_pkl(
-        os.path.join(CONFIG_DIR, "base.json"),
-        os.path.join(CONFIG_DIR, "base.pkl"),
-    )
-
-
-def load_stage_config(stage_id):
-    return _load_json_or_pkl(
-        os.path.join(STAGES_DIR, f"{stage_id}.json"),
-        os.path.join(STAGES_DIR, f"{stage_id}.pkl"),
-    )
-
-
-def list_available_stages():
-    stages = set()
-    for ext in ("*.json", "*.pkl"):
-        for fp in glob.glob(os.path.join(STAGES_DIR, ext)):
-            stages.add(os.path.splitext(os.path.basename(fp))[0])
-    return sorted(stages)
-
-
-# ──────────────────────────────────────────────────────────────
-# base + stage 머지 → 앱이 쓰는 config dict
-# ──────────────────────────────────────────────────────────────
-def merge_base_and_stage(base, stage):
-    if not base:
-        return {}
-    stage = stage or {}
-
-    admin_cols = list(base.get("admin_cols_common", [])) + list(stage.get("admin_cols_stage", []))
-    common_disp = [x["display_name"] for x in base.get("admin_cols_common", [])]
-
-    stage_order = list(stage.get("col_order_stage", []))
-    col_order = []
-    if "맞춤분류" in stage_order:
-        col_order.append("맞춤분류")
-        stage_order = [c for c in stage_order if c != "맞춤분류"]
-    col_order.extend(common_disp)
-    col_order.extend(stage_order)
-
-    return {
-        "manager_col":       base.get("manager_col", ""),
-        "manager_col2":      base.get("manager_col2", ""),
-        "manager_name_col":  base.get("manager_name_col", ""),
-        "merge_key1_col":    base.get("merge_key1_col", ""),
-        "merge_key2_col":    base.get("merge_key2_col", ""),
-        "merge_key3_col":    base.get("merge_key3_col", ""),
-        "admin_categories":  base.get("admin_categories", []),
-        "admin_cols":        admin_cols,
-        "admin_goals":       stage.get("admin_goals", []) or base.get("admin_goals", []),
-        "col_order":         col_order,
-        "col_groups":        stage.get("col_groups", []),
-        "prize_config":      stage.get("prize_config", []),
-        "clip_footer":       stage.get("clip_footer", "") or base.get("clip_footer_default", ""),
+def _apply_autoload_result(result):
+    """auto_load() 결과를 session_state에 주입."""
+    st.session_state['df_merged'] = result['df_merged']
+    for k, v in result['config'].items():
+        st.session_state[k] = v
+    st.session_state['_autoload_info'] = {
+        'detected_stage': result['detected_stage'],
+        'current_month':  result['current_month'],
+        'files':          result['files'],
     }
 
 
-# ──────────────────────────────────────────────────────────────
-# 메인 진입점
-# ──────────────────────────────────────────────────────────────
-def auto_load(force_stage=None):
-    """
-    Returns:
-        성공: {'df_merged', 'config', 'detected_stage', 'current_month', 'files'}
-        실패: {'error': 메시지}
-    """
-    files = find_latest_data_files()
-    missing = [k for k, v in files.items() if not v]
-    if missing:
-        return {"error": f"data/ 폴더에 다음 파일이 없습니다: {', '.join(missing)}"}
+def render_admin_view():
+    """관리자 상태 화면 메인 렌더링."""
+    st.title("⚙️ 관리자 상태 화면 (자동 모드)")
+    _do_admin_auth()
 
-    base = load_base_config()
-    if not base:
-        return {"error": "config/base.json (또는 .pkl)을 찾을 수 없습니다."}
+    al_info = st.session_state.get('_autoload_info', {})
+
+    # ─────────────────────────────────────────────────
+    # 1. 자동 로드 상태
+    # ─────────────────────────────────────────────────
+    st.header("1. 📂 자동 로드 상태")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("데이터 기준일", st.session_state.get('data_date', '-'))
+    with c2:
+        cm = al_info.get('current_month', '-')
+        st.metric("감지된 월", f"{cm}월" if isinstance(cm, int) else str(cm))
+    with c3:
+        stage = al_info.get('detected_stage', '-')
+        override = st.session_state.get('_stage_override')
+        if override and override != stage:
+            st.metric("적용 Stage", f"{override}", delta=f"(자동: {stage})")
+        else:
+            st.metric("적용 Stage", stage)
+
+    st.markdown("**로드된 파일:**")
+    files = al_info.get('files', {}) or {}
+    if not files:
+        st.warning("파일 정보가 없습니다.")
+    else:
+        for key, fp in files.items():
+            fname = os.path.basename(fp) if fp else '(없음)'
+            st.markdown(f"- `{key}` → `{fname}`")
+
+    df = st.session_state.get('df_merged')
+    if df is not None and hasattr(df, 'shape'):
+        n_rows = len(df)
+        n_cols = len(df.columns)
+        st.caption(f"병합 결과: **{n_rows:,}**행 × **{n_cols}**열")
+
+    # ─────────────────────────────────────────────────
+    # 2. Stage 수동 오버라이드
+    # ─────────────────────────────────────────────────
+    st.header("2. 🎛️ Stage 수동 오버라이드")
+    st.caption("자동 감지가 틀렸을 때만 사용합니다. 오버라이드는 세션 중에만 유지되며, "
+               "앱을 새로고침하면 다시 자동 감지로 돌아갑니다.")
+
+    available = al.list_available_stages()
+    options = ['(자동 감지 사용)'] + available
+
+    current_override = st.session_state.get('_stage_override', '')
+    default_idx = 0
+    if current_override and current_override in options:
+        default_idx = options.index(current_override)
+
+    selected = st.selectbox("Stage 선택", options, index=default_idx, key="stage_override_select")
+
+    if st.button("🔄 Stage 재적용", type="primary"):
+        force = None if selected == '(자동 감지 사용)' else selected
+        if force:
+            st.session_state['_stage_override'] = force
+        else:
+            st.session_state.pop('_stage_override', None)
+
+        with st.spinner("다시 로드 중..."):
+            result = al.auto_load(force_stage=force)
+        if 'error' in result:
+            st.error(f"❌ {result['error']}")
+        else:
+            _apply_autoload_result(result)
+            st.success(f"✅ '{selected}' 적용 완료")
+            st.rerun()
+
+    # ─────────────────────────────────────────────────
+    # 3. 현재 적용된 설정 요약 (읽기 전용)
+    # ─────────────────────────────────────────────────
+    st.header("3. 📋 현재 적용된 설정 요약")
+    st.caption("설정 수정은 `config/base.json` 또는 `config/stages/<stage>.json` 파일을 직접 편집 후 git push.")
+
+    with st.expander(f"📄 표시 항목 ({len(st.session_state.get('admin_cols', []))}개)", expanded=False):
+        for item in st.session_state.get('admin_cols', []):
+            orig = item.get('col', '')
+            disp = item.get('display_name', orig)
+            fb = item.get('fallback_col', '')
+            fb_text = f" (대체: `{fb}`)" if fb else ""
+            st.markdown(f"- `{orig}` → **[{disp}]**{fb_text}")
+
+    with st.expander(f"🎯 목표 구간 ({len(st.session_state.get('admin_goals', []))}개)", expanded=False):
+        goals = st.session_state.get('admin_goals', [])
+        if goals:
+            for g in goals:
+                t = g.get('target_col', '')
+                tiers = g.get('tiers', [])
+                tiers_disp = [f"{int(x)//10000}만" if x % 10000 == 0 else f"{x:,.0f}" for x in tiers]
+                st.markdown(f"- **{t}**: {', '.join(tiers_disp)}")
+        else:
+            st.caption("(설정 없음)")
+
+    with st.expander(f"🏷️ 맞춤 분류 ({len(st.session_state.get('admin_categories', []))}개)", expanded=False):
+        for c in st.session_state.get('admin_categories', []):
+            conds = c.get('conditions', [])
+            cond_strs = [f"`{x.get('col','')}` {x.get('cond','')}" for x in conds]
+            st.markdown(f"- **[{c.get('name','')}]** ← {' AND '.join(cond_strs)}")
+
+    with st.expander(f"📋 화면 표시 순서 ({len(st.session_state.get('col_order', []))}개)", expanded=False):
+        for i, c in enumerate(st.session_state.get('col_order', []), 1):
+            st.markdown(f"{i}. {c}")
+
+    with st.expander(f"📊 그룹 헤더 ({len(st.session_state.get('col_groups', []))}개)", expanded=False):
+        for g in st.session_state.get('col_groups', []):
+            st.markdown(f"- **[{g.get('name','')}]** : {', '.join(g.get('cols', []))}")
+
+    p_cfgs = st.session_state.get('prize_config', [])
+    w_cnt = sum(1 for c in p_cfgs if c.get('category') == 'weekly')
+    c_cnt = sum(1 for c in p_cfgs if c.get('category') == 'cumulative')
+    with st.expander(
+        f"💰 시상금 시책 ({len(p_cfgs)}개: 주차/브릿지 {w_cnt} · 누계 {c_cnt})",
+        expanded=False
+    ):
+        for i, p in enumerate(p_cfgs, 1):
+            icon = '📌' if p.get('category') == 'weekly' else '📈'
+            st.markdown(f"{icon} [{i}] **{p.get('name','')}** ({p.get('type','')})")
+
+    with st.expander("📝 카톡 하단 인사말", expanded=False):
+        st.code(st.session_state.get('clip_footer', ''), language=None)
+
+    # ─────────────────────────────────────────────────
+    # 4. 설정 백업 다운로드
+    # ─────────────────────────────────────────────────
+    st.header("4. 💾 현재 설정 백업")
+    st.caption("현재 적용된 설정을 pkl로 내려받아 보관합니다.")
+
+    cfg_keys = [
+        'manager_col', 'manager_col2', 'manager_name_col',
+        'merge_key1_col', 'merge_key2_col', 'merge_key3_col',
+        'admin_cols', 'admin_goals', 'admin_categories',
+        'col_order', 'col_groups', 'prize_config',
+        'clip_footer', 'data_date',
+    ]
+    cfg_dump = {k: st.session_state.get(k) for k in cfg_keys}
 
     try:
-        df = merge_three_files(
-            files["MC_LIST_OUT"],
-            files["PRIZE_6_BRIDGE_OUT"],
-            files["PRIZE_SUM_OUT"],
-            base["merge_key1_col"],
-            base["merge_key2_col"],
-            base["merge_key3_col"],
+        pkl_bytes = pickle.dumps(cfg_dump)
+        fname_date = str(st.session_state.get('data_date', '')).replace('.', '')
+        st.download_button(
+            "⬇️ 백업 pkl 다운로드",
+            pkl_bytes,
+            file_name=f"meritz_config_backup_{fname_date}.pkl",
+            mime="application/octet-stream",
         )
     except Exception as e:
-        return {"error": f"파일 병합 실패: {e}"}
-
-    current_month = detect_current_month(df)
-    stage_id = force_stage or detect_stage(df)
-
-    stage = load_stage_config(stage_id)
-
-    # 폴백: 감지된 stage 파일이 없으면 가장 가까운 하위 stage로 내려감
-    if not stage:
-        available = set(list_available_stages())
-        m = re.match(r"stage_(\d+)_week\d+", stage_id)
-        if m:
-            detected_n = int(m.group(1))
-            fallback_id = None
-            for n in range(detected_n - 1, 0, -1):
-                candidates = [s for s in available if s.startswith(f"stage_{n}_")]
-                if candidates:
-                    fallback_id = sorted(candidates)[0]
-                    break
-            if fallback_id:
-                stage = load_stage_config(fallback_id)
-                if stage:
-                    stage_id = f"{fallback_id} (감지: {stage_id} — 해당 stage 파일 없음, 하위 stage로 폴백)"
-        if not stage:
-            return {"error": f"stage '{stage_id}'의 설정 파일(config/stages/{stage_id}.json 또는 .pkl)을 찾을 수 없습니다."}
-
-    base_r = substitute_placeholders(base, current_month)
-    stage_r = substitute_placeholders(stage, current_month)
-    config = merge_base_and_stage(base_r, stage_r)
-
-    m = re.search(r"(\d{8})", os.path.basename(files["MC_LIST_OUT"]))
-    if m:
-        ymd = m.group(1)
-        config["data_date"] = f"{ymd[:4]}.{ymd[4:6]}.{ymd[6:8]}"
-    else:
-        config["data_date"] = datetime.now().strftime("%Y.%m.%d")
-
-    return {
-        "df_merged":      df,
-        "config":         config,
-        "detected_stage": stage_id,
-        "current_month":  current_month,
-        "files":          files,
-    }
+        st.error(f"백업 생성 실패: {e}")
