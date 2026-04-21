@@ -271,9 +271,7 @@ def calculate_agent_performance(target_code, df, ps):
             shortfall = safe_float(row.get(wc['shortfall'], 0)) if wc.get('shortfall') else 0
             prize_amt = safe_float(row.get(wc['prize'], 0)) if wc.get('prize') else 0
             has_prize = wc.get('prize') is not None
-            desc = '3주 실적과 동일 금액을 4주에 가동 시 대상'
-            if not has_prize:
-                desc += ' (시상금 추후 확정)'
+            desc = ''
             if perf_3w > 0 or perf_4w > 0 or prize_amt > 0:
                 results.append({
                     'name': '주차연속가동 (3~4주)',
