@@ -182,8 +182,8 @@ elif menu == "매니저 화면 (로그인)":
     if st.session_state.get('_autoload_error'):
         st.title("👤 매니저 전용 실적 현황")
         st.error(f"⚠️ 자동 로드 실패: {st.session_state['_autoload_error']}")
-        st.info("`data/` 폴더에 `MC_LIST_OUT_*.xlsx`, `PRIZE_6_BRIDGE_OUT_*.xlsx`, "
-                "`PRIZE_SUM_OUT_*.xlsx` 3개 파일이 있는지 확인하세요.")
+        st.info("`data/` 폴더에 `MC_LIST_OUT*.xlsx`, `PRIZE_6_BRIDGE_OUT*.xlsx`, "
+                "`PRIZE_SUM_OUT*.xlsx` 3개 파일이 있는지 확인하세요.")
         st.stop()
 
     df_check = st.session_state.get('df_merged', pd.DataFrame())
