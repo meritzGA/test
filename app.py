@@ -205,8 +205,23 @@ def detect_prize_structure(cols_tuple, labels_json):
             'lp': f'{pm2}월' if pm2 else '', 'lc': f'{cm2b}월' if cm2b else '',
         }
 
+    # ── 주차연속가동 (3~4주 동일 가동) ──
+    weekly_consec = None
+    if '주차연속가동대상' in cols:
+        weekly_consec = {
+            'target_col': '주차연속가동대상',
+            'perf_3w': '주차연속가동_3주실적' if '주차연속가동_3주실적' in cols else None,
+            'perf_4w': '주차연속가동_4주실적' if '주차연속가동_4주실적' in cols else None,
+            'tier_3w': '주차연속가동_3주구간' if '주차연속가동_3주구간' in cols else None,
+            'tier_4w': '주차연속가동_4주구간' if '주차연속가동_4주구간' in cols else None,
+            'target': '주차연속가동_실적목표' if '주차연속가동_실적목표' in cols else None,
+            'shortfall': '주차연속가동_실적부족액' if '주차연속가동_실적부족액' in cols else None,
+            'prize': '추가13회예정금_주차연속가동' if '추가13회예정금_주차연속가동' in cols else None,
+        }
+
     return {'weeks': weeks, 'cumul': cumul,
-            'bridge': bridge, 'consec': consec}
+            'bridge': bridge, 'consec': consec,
+            'weekly_consec': weekly_consec}
 
 
 # ═══════════════════════════════════════════════════════
@@ -242,6 +257,33 @@ def calculate_agent_performance(target_code, df, ps):
                 'type': '구간', 'val': perf, 'prize': prize,
                 'prize_details': details
             })
+
+    # ── 주차연속가동 (3~4주 동일 가동) ──
+    if ps.get('weekly_consec'):
+        wc = ps['weekly_consec']
+        tgt_val = safe_float(row.get(wc['target_col'], 0))
+        if tgt_val != 0:  # 대상자만
+            perf_3w = safe_float(row.get(wc['perf_3w'], 0)) if wc.get('perf_3w') else 0
+            perf_4w = safe_float(row.get(wc['perf_4w'], 0)) if wc.get('perf_4w') else 0
+            tier_3w = safe_float(row.get(wc['tier_3w'], 0)) if wc.get('tier_3w') else 0
+            tier_4w = safe_float(row.get(wc['tier_4w'], 0)) if wc.get('tier_4w') else 0
+            target_amt = safe_float(row.get(wc['target'], 0)) if wc.get('target') else 0
+            shortfall = safe_float(row.get(wc['shortfall'], 0)) if wc.get('shortfall') else 0
+            prize_amt = safe_float(row.get(wc['prize'], 0)) if wc.get('prize') else 0
+            has_prize = wc.get('prize') is not None
+            desc = '3주 실적과 동일 금액을 4주에 가동 시 대상'
+            if not has_prize:
+                desc += ' (시상금 추후 확정)'
+            if perf_3w > 0 or perf_4w > 0 or prize_amt > 0:
+                results.append({
+                    'name': '주차연속가동 (3~4주)',
+                    'desc': desc,
+                    'category': 'weekly', 'type': '주차연속가동',
+                    'perf_3w': perf_3w, 'perf_4w': perf_4w,
+                    'tier_3w': tier_3w, 'tier_4w': tier_4w,
+                    'target': target_amt, 'shortfall': shortfall,
+                    'prize': prize_amt, 'has_prize': has_prize,
+                })
 
     # ── 연속가동 (브릿지보다 먼저 표시) ──
     if ps.get('consec'):
@@ -349,6 +391,15 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
                 cond = "(당월 가동 조건)" if r.get('shortfall', 0) > 0 else ""
                 sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{r['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>{cond}</span></span><span class='summary-item-val'>{r['prize']:,.0f}원</span></div>"
                 share += f"🔹 {r['name']}: {r['prize']:,.0f}원 {cond}\n"
+            elif r['type'] == '주차연속가동':
+                tier_txt = f"{r['tier_3w']:,.0f}원 구간" if r.get('tier_3w', 0) > 0 else "미달성"
+                if r.get('has_prize') and r['prize'] > 0:
+                    sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{r['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(3주: {r['perf_3w']:,.0f} / {tier_txt})</span></span><span class='summary-item-val'>{r['prize']:,.0f}원</span></div>"
+                    share += f"🔹 {r['name']}: {r['prize']:,.0f}원 (3주 실적 {r['perf_3w']:,.0f}원)\n"
+                else:
+                    sub = "시상금 추후" if not r.get('has_prize') else "0원"
+                    sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{r['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(3주: {r['perf_3w']:,.0f} / {tier_txt})</span></span><span class='summary-item-val' style='font-size:1.0rem;color:rgba(255,255,255,0.85);'>{sub}</span></div>"
+                    share += f"🔹 {r['name']}: 3주 실적 {r['perf_3w']:,.0f}원 ({tier_txt})\n"
         sh += "</div>"
         st.markdown(sh, unsafe_allow_html=True)
 
@@ -385,6 +436,48 @@ def render_ui_cards(user_name, results, total_prize, data_date, show_share=False
                     f"</div>"
                 )
                 share += f"\n[{r['name']}]\n- {lp}: {r['val_prev']:,.0f}원 / {lc}: {r['val_curr']:,.0f}원\n- 시상금: {r['prize']:,.0f}원\n"
+                if r.get('shortfall', 0) > 0:
+                    share += f"  ⚠️ 부족: {r['shortfall']:,.0f}원\n"
+
+            elif r['type'] == '주차연속가동':
+                tier3_txt = f"{r['tier_3w']:,.0f}원 구간" if r.get('tier_3w', 0) > 0 else "미달성"
+                sf_html = ""
+                if r.get('shortfall', 0) > 0:
+                    sf_html = f"<div class='shortfall-row'><div class='shortfall-text'>⚠️ 4주 부족금액: {r['shortfall']:,.0f}원 (목표: {r.get('target',0):,.0f}원)</div></div>"
+                # 4주 실적이 있으면 표시
+                w4_html = ""
+                if r.get('perf_4w', 0) > 0:
+                    tier4_txt = f"{r['tier_4w']:,.0f}원 구간" if r.get('tier_4w', 0) > 0 else ""
+                    w4_html = (
+                        f"<div class='data-row'><span class='data-label'>4주 실적</span><span class='data-value'>{r['perf_4w']:,.0f}원</span></div>"
+                        + (f"<div class='data-row'><span class='data-label'>4주 확보 구간</span><span class='data-value'>{tier4_txt}</span></div>" if tier4_txt else "")
+                    )
+                # 시상금
+                if r.get('has_prize') and r['prize'] > 0:
+                    prize_html = f"<div class='prize-row'><span class='prize-label'>시상금</span><span class='prize-value'>{r['prize']:,.0f}원</span></div>"
+                elif r.get('has_prize'):
+                    prize_html = f"<div class='prize-row'><span class='prize-label'>시상금</span><span class='prize-value'>0원</span></div>"
+                else:
+                    prize_html = f"<div class='prize-row'><span class='prize-label'>시상금</span><span class='prize-value' style='font-size:1.3rem;'>추후 확정</span></div>"
+                ch = (
+                    f"<div class='toss-card'>"
+                    f"<div class='toss-title'>🔥 {r['name']}</div>"
+                    f"<div class='toss-desc'>{desc_html}</div>"
+                    f"<div class='data-row'><span class='data-label'>3주 실적</span><span class='data-value'>{r['perf_3w']:,.0f}원</span></div>"
+                    f"<div class='data-row'><span class='data-label'>3주 확보 구간</span><span class='data-value'>{tier3_txt}</span></div>"
+                    f"{w4_html}"
+                    f"<div class='toss-divider'></div>"
+                    f"{sf_html}"
+                    f"{prize_html}"
+                    f"</div>"
+                )
+                share += f"\n[{r['name']}]\n- 3주 실적: {r['perf_3w']:,.0f}원 ({tier3_txt})\n"
+                if r.get('perf_4w', 0) > 0:
+                    share += f"- 4주 실적: {r['perf_4w']:,.0f}원\n"
+                if r.get('has_prize'):
+                    share += f"- 시상금: {r['prize']:,.0f}원\n"
+                else:
+                    share += "- 시상금: 추후 확정\n"
                 if r.get('shortfall', 0) > 0:
                     share += f"  ⚠️ 부족: {r['shortfall']:,.0f}원\n"
 
@@ -762,6 +855,17 @@ elif mode == "⚙️ 시스템 관리자":
         c = ps['consec']
         st.markdown(f"- {c['lp']}: `{c['prev']}` / {c['lc']}: `{c['curr']}`")
         st.markdown(f"- 시상금: `{c['prize']}` / 부족액: `{c.get('shortfall', '없음')}`")
+
+    if ps.get('weekly_consec'):
+        st.subheader("🔥 주차연속가동 (3~4주)")
+        wc = ps['weekly_consec']
+        st.markdown(f"- 3주: `{wc.get('perf_3w','없음')}` / 구간: `{wc.get('tier_3w','없음')}`")
+        st.markdown(f"- 4주: `{wc.get('perf_4w','없음')}` / 구간: `{wc.get('tier_4w','없음')}`")
+        st.markdown(f"- 목표: `{wc.get('target','없음')}` / 부족액: `{wc.get('shortfall','없음')}`")
+        if wc.get('prize'):
+            st.markdown(f"- 시상금: `{wc['prize']}` ✅")
+        else:
+            st.caption("💡 시상금 컬럼 없음 → '추후 확정' 표시")
 
     st.divider()
     st.markdown("""
