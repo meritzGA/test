@@ -99,13 +99,44 @@ def _load_excel_clean(path):
 # ──────────────────────────────────────────────────────────────
 # 3개 파일 outer merge (기존 app.py 병합 로직 그대로)
 # ──────────────────────────────────────────────────────────────
+
+# merge key가 파일에 없을 때 자동으로 찾아볼 후보들.
+# 지정 키 → 후보 순서대로 시도 → 모두 실패하면 에러.
+_MERGE_KEY_FALLBACKS = {
+    "대리점설계사조직코드":   ["대리점설계사조직코드", "현재대리점설계사조직코드"],
+    "현재대리점설계사조직코드": ["현재대리점설계사조직코드", "대리점설계사조직코드"],
+}
+
+
+def _resolve_merge_key(df, requested_key, file_label):
+    """df에서 requested_key를 찾고, 없으면 fallback 후보를 순회."""
+    if requested_key in df.columns:
+        return requested_key
+    for cand in _MERGE_KEY_FALLBACKS.get(requested_key, []):
+        if cand in df.columns:
+            return cand
+    # 마지막 시도: "대리점설계사조직코드" 또는 "현재대리점설계사조직코드"가 들어간 컬럼 아무거나
+    for c in df.columns:
+        if "대리점설계사조직코드" in c:
+            return c
+    raise KeyError(
+        f"{file_label} 파일에서 merge key '{requested_key}' 또는 대체 후보를 찾지 못했습니다. "
+        f"실제 컬럼 일부: {list(df.columns)[:10]}..."
+    )
+
+
 def merge_three_files(f1, f2, f3, key1, key2, key3):
     df1 = _load_excel_clean(f1)
     df2 = _load_excel_clean(f2)
     df3 = _load_excel_clean(f3)
 
-    df1["merge_key1"] = df1[key1].apply(_clean_key)
-    df2["merge_key2"] = df2[key2].apply(_clean_key)
+    # 각 파일에서 실제 사용할 키를 결정 (fallback 포함)
+    k1 = _resolve_merge_key(df1, key1, "MC_LIST_OUT")
+    k2 = _resolve_merge_key(df2, key2, "PRIZE_6_BRIDGE_OUT")
+    k3 = _resolve_merge_key(df3, key3, "PRIZE_SUM_OUT")
+
+    df1["merge_key1"] = df1[k1].apply(_clean_key)
+    df2["merge_key2"] = df2[k2].apply(_clean_key)
     df_merged = pd.merge(
         df1, df2,
         left_on="merge_key1", right_on="merge_key2",
@@ -122,7 +153,7 @@ def merge_three_files(f1, f2, f3, key1, key2, key3):
 
     df_merged["_unified_search_key"] = df_merged["merge_key1"].combine_first(df_merged["merge_key2"])
 
-    df3["merge_key3"] = df3[key3].apply(_clean_key)
+    df3["merge_key3"] = df3[k3].apply(_clean_key)
     df_merged = pd.merge(
         df_merged, df3,
         left_on="_unified_search_key", right_on="merge_key3",
