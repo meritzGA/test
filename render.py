@@ -395,57 +395,77 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     for row_idx in range(len(df)):
         if prize_data_map and row_idx in prize_data_map:
             p_results, p_total = prize_data_map[row_idx]
-            p_gugan = [r for r in p_results if r['category'] == 'weekly' and r['type'] == '구간']
-            p_bridge = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
-            p_cumul = [r for r in p_results if r['category'] == 'cumulative']
-            p_cumul_sum = sum(r['prize'] for r in p_cumul)
-            p_gugan_sum = sum(r['prize'] for r in p_gugan)
+            p_gugan   = [r for r in p_results if r['type'] == '구간']
+            p_bridge  = [r for r in p_results if r['type'] == '월브릿지']
+            p_wconsec = [r for r in p_results if r['type'] == '주차연속']
+            p_cumul   = [r for r in p_results if r['category'] == 'cumulative']
+
+            p_gugan_sum  = sum(r['prize'] for r in p_gugan)
             p_bridge_sum = sum(r['prize'] for r in p_bridge)
+            p_wcon_sum   = sum(r['prize'] for r in p_wconsec)
+            p_cumul_sum  = sum(r['prize'] for r in p_cumul)
 
             ph = f'<div style="padding:5px;">'
             ph += f'<div style="font-weight:800;color:#d9232e;font-size:18px;margin-bottom:4px;">💰 총 시상금: {p_total:,.0f}원</div>'
-            if p_cumul_sum > 0 or p_gugan_sum > 0 or p_bridge_sum > 0:
-                parts = []
-                if p_cumul_sum > 0: parts.append(f"누계 {p_cumul_sum:,.0f}")
-                if p_gugan_sum > 0: parts.append(f"주차 {p_gugan_sum:,.0f}")
-                if p_bridge_sum > 0: parts.append(f"브릿지 {p_bridge_sum:,.0f}")
+
+            parts = []
+            if p_gugan_sum > 0:  parts.append(f"주차 {p_gugan_sum:,.0f}")
+            if p_bridge_sum > 0: parts.append(f"브릿지 {p_bridge_sum:,.0f}")
+            if p_wcon_sum > 0:   parts.append(f"주차연속 {p_wcon_sum:,.0f}")
+            if p_cumul_sum > 0:  parts.append(f"누계 {p_cumul_sum:,.0f}")
+            if parts:
                 ph += f'<div style="color:#888;font-size:13px;margin-bottom:12px;">({" + ".join(parts)})</div>'
+
+            # 주차 시상
             if p_gugan:
                 ph += '<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 주차 시상</div>'
                 for r in p_gugan:
                     pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-                    ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#888;">{r["name"]}</span><span style="color:#888;font-weight:600;">{pz}</span></div>'
+                    ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                     if len(r.get('prize_details', [])) > 1:
                         for d in r.get('prize_details', []):
                             ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#aaa;font-size:11px;">· {d["label"]}</span><span style="color:#aaa;font-size:11px;">{d["amount"]:,.0f}원</span></div>'
+
+            # 월 브릿지 / 연속가동
             if p_bridge:
-                ph += '<div style="font-size:12px;color:#d4380d;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">🌉 브릿지 시상</div>'
+                ph += '<div style="font-size:12px;color:#d4380d;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">🌉 월 브릿지 / 연속가동</div>'
                 for r in p_bridge:
                     pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-                    if r['type'] == '브릿지2':
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">(당월 {int(r.get("curr_req",100000)//10000)}만 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                        if r.get('shortfall', 0) > 0:
-                            ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</div>'
-                    elif r['type'] == '주차브릿지':
-                        w3l = r.get('w3_label','3주'); w4l = r.get('w4_label','4주')
-                        tier_txt = f"{r.get('tier',0):,.0f}원" if r.get('tier',0) > 0 else "미달성"
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">({w4l} 동일 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#888;font-size:11px;">{w3l} 실적 (구간: {tier_txt})</span><span style="color:#888;font-size:11px;">{r.get("val_w3",0):,.0f}원</span></div>'
-                        if r.get('shortfall', 0) > 0:
-                            ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 {r["shortfall"]:,.0f}원 더 하면 → {r.get("next_tier_prize",0):,.0f}원</div>'
+                    lp, lc = r.get('label_prev', '전월'), r.get('label_curr', '당월')
+                    ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                    ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#888;font-size:11px;">· {lp} 실적</span><span style="color:#888;font-size:11px;">{r.get("val_prev",0):,.0f}원</span></div>'
+                    ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#888;font-size:11px;">· {lc} 실적</span><span style="color:#888;font-size:11px;">{r.get("val_curr",0):,.0f}원</span></div>'
+                    if r.get('shortfall', 0) > 0 and r.get('target', 0) > 0:
+                        ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🎯 목표 {r["target"]:,.0f}원까지 {r["shortfall"]:,.0f}원 부족</div>'
+
+            # 주차연속가동 (3~4주)
+            if p_wconsec:
+                ph += '<div style="font-size:12px;color:#c05621;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">🔥 주차연속가동 (3~4주)</div>'
+                for r in p_wconsec:
+                    if r.get('has_prize') and r['prize'] > 0:
+                        pz = f"{r['prize']:,.0f}원"
+                    elif r.get('has_prize'):
+                        pz = "0원"
                     else:
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                        if len(r.get('prize_details', [])) > 1:
-                            for d in r.get('prize_details', []):
-                                ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#aaa;font-size:11px;">· {d["label"]}</span><span style="color:#aaa;font-size:11px;">{d["amount"]:,.0f}원</span></div>'
+                        pz = "추후 확정"
+                    tier3 = f"{r.get('tier_3w',0):,.0f}원 구간" if r.get('tier_3w', 0) > 0 else "미달성"
+                    ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                    ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#888;font-size:11px;">· 3주 실적 ({tier3})</span><span style="color:#888;font-size:11px;">{r.get("perf_3w",0):,.0f}원</span></div>'
+                    if r.get('perf_4w', 0) > 0:
+                        ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#888;font-size:11px;">· 4주 실적</span><span style="color:#888;font-size:11px;">{r["perf_4w"]:,.0f}원</span></div>'
+                    if r.get('shortfall', 0) > 0:
+                        ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 목표까지 {r["shortfall"]:,.0f}원 부족</div>'
+
+            # 월 누계
             if p_cumul:
-                ph += '<div style="font-size:12px;color:#2B6CB0;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📈 누계 시상</div>'
+                ph += '<div style="font-size:12px;color:#2B6CB0;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📈 월 누계</div>'
                 for r in p_cumul:
                     pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
                     ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                     if len(r.get('prize_details', [])) > 1:
                         for d in r.get('prize_details', []):
                             ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#aaa;font-size:11px;">· {d["label"]}</span><span style="color:#aaa;font-size:11px;">{d["amount"]:,.0f}원</span></div>'
+
             ph += '</div>'
             prize_htmls.append(ph)
         else:
