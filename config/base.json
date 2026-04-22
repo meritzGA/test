@@ -3,9 +3,9 @@
   "manager_col": "지원매니저코드",
   "manager_col2": "매니저코드",
   "manager_name_col": "지원매니저명",
-  "merge_key1_col": "대리점설계사조직코드",
+  "merge_key1_col": "현재대리점설계사조직코드",
   "merge_key2_col": "대리점설계사조직코드",
-  "merge_key3_col": "현재대리점설계사조직코드",
+  "merge_key3_col": "대리점설계사조직코드",
   "admin_categories": [
     {
       "conditions": [
