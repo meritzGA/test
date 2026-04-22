@@ -20,7 +20,7 @@ import glob
 import json
 import pickle
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter
 
 # ──────────────────────────────────────────────────────────────
@@ -382,12 +382,19 @@ def auto_load(force_stage=None):
     stage_r = substitute_placeholders(stage, current_month)
     config = merge_base_and_stage(base_r, stage_r)
 
+    # data_date: 파일명 YYYYMMDD는 수집일이고, 실제 데이터는 전일 기준.
+    # 파일명 20260422 → data_date = 2026.04.21 (월·연 경계 자동 처리)
     m = re.search(r"(\d{8})", os.path.basename(files["MC_LIST_OUT"]))
     if m:
-        ymd = m.group(1)
-        config["data_date"] = f"{ymd[:4]}.{ymd[4:6]}.{ymd[6:8]}"
+        try:
+            collected = datetime.strptime(m.group(1), "%Y%m%d")
+            data_dt = collected - timedelta(days=1)
+            config["data_date"] = data_dt.strftime("%Y.%m.%d")
+        except ValueError:
+            ymd = m.group(1)
+            config["data_date"] = f"{ymd[:4]}.{ymd[4:6]}.{ymd[6:8]}"
     else:
-        config["data_date"] = datetime.now().strftime("%Y.%m.%d")
+        config["data_date"] = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
 
     return {
         "df_merged":      df,
